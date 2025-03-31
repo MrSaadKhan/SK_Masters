@@ -149,14 +149,14 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     process.start()
     start_time = time.time()
     
-    model_filename = create_fasttext_embeddings.train_fasttext_model(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
+    # model_filename = create_fasttext_embeddings.train_fasttext_model(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
 
-    FastText_training_time = time.time() - start_time
-    print(f"FastText training time: {FastText_training_time}")
-    seen_ft, unseen_ft = create_fasttext_embeddings.create_embeddings(model_filename, file_path, device_list, data_path, window_size, slide_length, vector_size)
-    print(f"FastText embedding time: {(time.time() - FastText_training_time)/(seen_ft+unseen_ft)}")
-    print(f"FastText TOTAL time per flow: {(time.time() - start_time)/(seen_ft+unseen_ft)}")
-    print(f"FastText TOTAL memory per flow: {highest_value_without_outliers(os.path.join(FastText_path, 'memory_measurements.txt'))/(seen_ft+unseen_ft)}")
+    # FastText_training_time = time.time() - start_time
+    # print(f"FastText training time: {FastText_training_time}")
+    # seen_ft, unseen_ft = create_fasttext_embeddings.create_embeddings(model_filename, file_path, device_list, data_path, window_size, slide_length, vector_size)
+    # print(f"FastText embedding time: {(time.time() - FastText_training_time)/(seen_ft+unseen_ft)}")
+    # print(f"FastText TOTAL time per flow: {(time.time() - start_time)/(seen_ft+unseen_ft)}")
+    # print(f"FastText TOTAL memory per flow: {highest_value_without_outliers(os.path.join(FastText_path, 'memory_measurements.txt'))/(seen_ft+unseen_ft)}")
 
     
     stop_event.set()  # Signal the memory monitor to stop

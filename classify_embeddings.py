@@ -221,8 +221,8 @@ def main(vector_list, device_range, vector_path, group_option, window_size, slid
     else:
         group_option = "Grouped"
 
-    embed_options = ["bert_embeddings", "fast_text_embeddings", "gpt2_embeddings"]  # Embedding options
-    more_options = ["BERT", "FastText", "GPT2"]
+    embed_options = ["bert_embeddings", "bert_embeddings_finetuned", "fast_text_embeddings", "gpt2_embeddings"]  # Embedding options
+    more_options = ["BERT", "BERT", "FastText", "GPT2"]
 
     accuracy_list = []  # List to store accuracies
     print(vector_list)
@@ -235,6 +235,7 @@ def main(vector_list, device_range, vector_path, group_option, window_size, slid
         fast_text_embeddings_classification_mem_usage = 0
 
         for option in embed_options:
+            print(f"option isssss: {option}")
             embed_name = f"{option}"
             folder_path = os.path.join(file_path, str(vector_size), more_options[embed_options.index(option)], group_option, f"{window_size}_{slide_length}", embed_name)
             print(f"Folder to analyze: {folder_path}")
