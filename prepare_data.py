@@ -95,7 +95,7 @@ def prepare_data(file_path, group_option=0, time_group=0, num2word_option=0):
     flattened_data = flatten(data)
     dev1, _ = split_list(flattened_data, num_elements[0])  # Split the list (second part is unused)
 
-    # dev1 = replace_words_in_dict_list(dev1, data_map)
+    dev1 = replace_words_in_dict_list(dev1, data_map)
     del data, flattened_data
 
     def random_split(lst, n):
