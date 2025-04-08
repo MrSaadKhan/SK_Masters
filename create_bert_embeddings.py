@@ -97,7 +97,7 @@ def create_embeddings(file_path, device_list, save_dir, data_dir, group_option, 
         seen, _ = get_data.get_data(data_dir, device)
         combined_seen_data.extend(seen[:int(len(seen) * fine_tune_percent)])
     
-    fine_tuned_model = fine_tune_model(fine_tuned_model, tokenizer, combined_seen_data, "combined_data", vector_size, learning_rate=4e-5, epochs=5)
+    # fine_tuned_model = fine_tune_model(fine_tuned_model, tokenizer, combined_seen_data, "combined_data", vector_size, learning_rate=4e-5, epochs=3)
     
     seen_count = 0
     unseen_count = 0

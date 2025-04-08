@@ -1,6 +1,26 @@
 import pandas as pd
 import ipaddress
 import os
+
+def process_flow(flow):
+    try:
+        src_ip = ipaddress.IPv4Address(flow.get('sourceIPv4Address', ''))
+        dst_ip = ipaddress.IPv4Address(flow.get('destinationIPv4Address', ''))
+
+        # Filter condition: drop if both source and dest are private
+        if src_ip.is_private and dst_ip.is_private:
+            return None
+
+        # Replace either one if it's private
+        if src_ip.is_private:
+            flow['sourceIPv4Address'] = '192.168.0.1'
+        if dst_ip.is_private:
+            flow['destinationIPv4Address'] = '192.168.0.1'
+
+        return flow
+    except ValueError:
+        return None  # Skip invalid IPs
+
 def clean_data(target_file):
     print("Cleaning data... for " + os.path.split(target_file)[1])
     
@@ -18,35 +38,31 @@ def clean_data(target_file):
         
         destination_ips = chunk['flows'].apply(lambda x: ipaddress.IPv4Address(x['destinationIPv4Address']))
         chunk = chunk[~(destination_ips.apply(lambda x: x.is_multicast) | destination_ips.apply(lambda x: x.is_private))]
-     
+
+        # Apply the process_flow logic to modify source and destination IPs
+        chunk['flows'] = chunk['flows'].apply(process_flow)
+
+        # Remove rows where process_flow returned None (i.e., both source and destination were private)
+        chunk = chunk[chunk['flows'].notnull()]
+
         # Remove sourceMacAddress, destinationMacAddress, and sourceIPv4Address from flows
-        chunk['flows'] = chunk['flows'].apply(lambda x: {k: v for k, v in x.items() if k not in ['sourceMacAddress', 'destinationMacAddress', 'sourceIPv4Address']})
+        chunk['flows'] = chunk['flows'].apply(lambda x: {k: v for k, v in x.items() if k not in ['sourceMacAddress', 'destinationMacAddress']})
         
         df1 = pd.DataFrame(chunk)
         df1 = df1[["flows"]]
-        #output.extend(chunk)
         output = output._append(df1)
 
     output1 = output.values.flatten().tolist()
 
-    # Change the input correctly
-    # print(output1)
+    # Clean the output (convert values to strings, strip symbols)
+    output1 = [
+        {
+            key: str(value).replace(',', '').replace('}', '').replace('{', '').replace("]", '').replace("[", '').replace("'", '') 
+            for key, value in item.items()
+        } 
+        for item in output1
+    ]
 
-    # output1 = [ '[' + str(item).replace(',', ' ').replace('}', '').replace('{', '').replace("]", '').replace("[", '').replace("'", '') + ']' for item in output1]
-    output1 = [{key: str(value).replace(',', '').replace('}', '').replace('{', '').replace("]", '').replace("[", '').replace("'", '') 
-                for key, value in item.items()} 
-                for item in output1]
-    # print(output1)
-    # output1 = [[s.strip('[]')] for s in output1]
-    #num_elements = sum(1 for sublist in output1 if sublist[0] is not None)
-    # num_elements = len(list(filter(lambda x: x[0] is not None, output1)))
-    
     num_elements = len(output)
-    
-    print(str(num_elements) +' '+'flows!')
-    # print(output1)
+    print(str(num_elements) + ' flows!')
     return output1, num_elements
-
-# if __name__ == "__main__":
-#     print(clean_data("/home/iotresearch/saad/data/KDDI-IoT-2019/ipfix/planex_smacam_pantilt.json"))
-    

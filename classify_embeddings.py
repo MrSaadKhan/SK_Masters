@@ -132,20 +132,24 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
     device_names = sorted(device_to_index, key=device_to_index.get)
     device_names = plot_device_names(device_names)
 
-    # Estimate font size based on figure and matrix size
-    matrix_size = y_pred.shape[0]
-    font_size = 100 / matrix_size  # tweak 300 based on what looks best
+    # Dynamically compute font size based on the confusion matrix dimensions
+    matrix_size = conf_matrix_percent.shape[0]
+    font_size = 100 / matrix_size  # Tweak scaling factor as needed
     print(f"Font size = {font_size}")
+    
     disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix_percent, display_labels=device_names)
     fig, ax = plt.subplots(figsize=(8, 6))
-    if (len(X_test) > 10):
+    if len(X_test) > 10:
         fig, ax = plt.subplots(figsize=(16, 12))
-
     disp.plot(cmap=plt.cm.Blues, ax=ax, values_format=".2f", text_kw={'fontsize': font_size})
-    ax.set_xlabel('Predicted Label')
-    ax.set_ylabel('True Label')
-    ax.set_xticklabels(device_names, rotation=90)
-    ax.set_yticklabels(device_names)
+    
+    # Set axis labels and tick parameters using the dynamic font size
+    ax.set_xlabel('Predicted Label', fontsize=font_size)
+    ax.set_ylabel('True Label', fontsize=font_size)
+    ax.tick_params(axis='both', which='major', labelsize=font_size)
+    ax.set_xticklabels(device_names, rotation=90, fontsize=font_size)
+    ax.set_yticklabels(device_names, fontsize=font_size)
+    
     plt.tight_layout()
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.png', dpi=300, transparent=True)
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.svg', dpi=300, transparent=True)
@@ -225,15 +229,24 @@ def classify_embeddings_nn(folder_path, output_name, vector_size):
     device_names = sorted(device_to_index, key=device_to_index.get)
     device_names = plot_device_names(device_names)
 
+    # Dynamically compute font size based on the confusion matrix dimensions
+    matrix_size = conf_matrix_percent.shape[0]
+    font_size = 100 / matrix_size  # Tweak scaling factor as needed
+    print(f"Font size = {font_size}")
+    
     disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix_percent, display_labels=device_names)
     fig, ax = plt.subplots(figsize=(8, 6))
-    if (len(X_test) > 10):
+    if len(X_test) > 10:
         fig, ax = plt.subplots(figsize=(16, 12))
-    disp.plot(cmap=plt.cm.Blues, ax=ax, values_format=".2f")
-    ax.set_xlabel('Predicted Label')
-    ax.set_ylabel('True Label')
-    ax.set_xticklabels(device_names, rotation=90)
-    ax.set_yticklabels(device_names)
+    disp.plot(cmap=plt.cm.Blues, ax=ax, values_format=".2f", text_kw={'fontsize': font_size})
+    
+    # Set axis labels and tick parameters using the dynamic font size
+    ax.set_xlabel('Predicted Label', fontsize=font_size)
+    ax.set_ylabel('True Label', fontsize=font_size)
+    ax.tick_params(axis='both', which='major', labelsize=font_size)
+    ax.set_xticklabels(device_names, rotation=90, fontsize=font_size)
+    ax.set_yticklabels(device_names, fontsize=font_size)
+    
     plt.tight_layout()
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.png', dpi=300, transparent=True)
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.svg', dpi=300, transparent=True)
