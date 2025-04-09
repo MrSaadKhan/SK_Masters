@@ -14,7 +14,7 @@ save_folder = os.path.join(current_directory, "flow_plots")
 os.makedirs(save_folder, exist_ok=True)
 
 # Number of flows to sample initially per file
-sample_num = 20
+sample_num = 30
 min_arrow_distance = 0.1  # minimum difference between arrows in seconds
 # We no longer need arrow_max_length or text_spacing for vertical offset
 # because we'll let the y-axis represent the actual count of flows.
@@ -163,7 +163,7 @@ x_min = global_min_time - time_margin
 x_max = global_max_time + time_margin
 
 n_files = len(file_flow_dict)
-fig, axes = plt.subplots(n_files, 1, figsize=(12, 5 * n_files), sharex=True)
+fig, axes = plt.subplots(n_files, 1, figsize=(2.03 * 5 * n_files, 5 * n_files), sharex=True)
 if n_files == 1:
     axes = [axes]
 
@@ -203,17 +203,32 @@ for ax, (filename, flows_to_plot) in zip(axes, file_flow_dict.items()):
     ax.set_ylim(0, max_flows_at_once + 1)
     
     # Labeling
-    ax.set_ylabel("Number of flows at the same time")
+    ax.set_ylabel("Number of flows at one time instance")
     ax.set_title(f"Flow Timeline ({filename})")
     ax.set_xlabel("Time (Date and Time)")
 
-    # Create a legend for this subplot
+    # Create a legend for this subplot (protocol/port)
     keys_in_plot = {flow["key"] for flow in flows_to_plot}
     legend_handles = [mpatches.Patch(color=universal_color_map[k], label=k) for k in sorted(keys_in_plot)]
-    ax.legend(handles=legend_handles, loc="upper right")
 
+    # First legend: protocol/port
+    legend1 = ax.legend(handles=legend_handles, loc="upper right", frameon=True)
+
+    # Second legend: blank box below the first one with flow count
+    flow_count_text = f"Flow Count: {len(flows_to_plot)}"
+    legend2 = ax.legend(
+        handles=[mpatches.Patch(color='white', label=flow_count_text)], 
+        loc="upper left", 
+        frameon=True
+    )
+
+    # Add the first legend back manually so it doesn't get removed
+    ax.add_artist(legend1)
+
+# Save the figure after plotting all files
 plt.tight_layout()
 save_path = os.path.join(save_folder, "selected_flow_timelines.svg")
-plt.savefig(save_path, format="svg", dpi=100)
+plt.savefig(save_path, format="svg", dpi=300)
 print(f"Combined plot saved to {os.path.abspath(save_path)}")
 plt.clf()
+
