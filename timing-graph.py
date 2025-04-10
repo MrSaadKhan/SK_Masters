@@ -33,32 +33,30 @@ def protocol_name(proto_number, dst_port):
     }
     # Define human-readable protocol names for common ports
     port_map = {
-        "80": "HTTP",  # TCP/80 -> HTTP
-        "443": "HTTPS",  # TCP/443 -> HTTPS
-        "53": "DNS",  # UDP/53 -> DNS
-        "22": "SSH",  # TCP/22 -> SSH
-        "21": "FTP",  # TCP/21 -> FTP
-        "123": "NTP",
-        "1900": "SSDP",
-        "5353": "Multicast DNS",
-        "10001": "SCP"
+        # "80": "HTTP",  # TCP/80 -> HTTP
+        # "443": "HTTPS",  # TCP/443 -> HTTPS
+        # "53": "DNS",  # UDP/53 -> DNS
+        # "22": "SSH",  # TCP/22 -> SSH
+        # "21": "FTP",  # TCP/21 -> FTP
+        # "123": "NTP",
+        # "1900": "SSDP",
+        # "5353": "Multicast DNS",
+        # "10001": "SCP"
     }
     
-    # Get protocol string (e.g., TCP, UDP, etc.)
     proto_str = protocol_map.get(proto_number, str(proto_number))
-    
-    # Combine protocol and port name, like "TCP/443" -> "HTTPS"
     port_str = port_map.get(str(dst_port), str(dst_port))
     
-    # Return combined string with protocol and human-readable port name
-    return f"{proto_str}/{dst_port}" if proto_str != "TCP" or str(dst_port) not in port_map else f"{proto_str}/{dst_port} ({port_str})"
+    # Return combined string with protocol and port name
+    return f"{proto_str}/{dst_port}" if proto_str != "TCP" or str(dst_port) not in port_map \
+           else f"{proto_str}/{dst_port} ({port_str})"
 
 # --- First Pass: Build Color Map ---
 common_keys = {"TCP/80", "TCP/443", "UDP/53"}
 primary_colors = {"TCP/80": "red", "TCP/443": "blue", "UDP/53": "green"}
 unique_keys = set()
 
-# Dictionary to store the 20-flow sample + time ranges for each file
+# Dictionary to store the sample flows and time ranges for each file
 sample_flow_dict = {}
 time_ranges = {}
 
@@ -99,7 +97,6 @@ for filename in selected_files:
             except:
                 continue
 
-    # If we gathered flows, record them along with their min/max times
     if flows_sample:
         sample_flow_dict[filename] = flows_sample
         sample_times = [f["start_time"] for f in flows_sample]
@@ -111,7 +108,7 @@ for key in common_keys:
     if key in unique_keys:
         universal_color_map[key] = primary_colors[key]
 
-# Assign colors to remaining keys
+# Assign colors to remaining keys using a colormap
 secondary_keys = sorted(unique_keys - common_keys)
 if secondary_keys:
     colormap = cm.get_cmap("tab20", len(secondary_keys))
@@ -123,7 +120,7 @@ for key, color in universal_color_map.items():
     print(f"{key}: {color}")
 
 # --- Determine Baseline Time Range ---
-# Find the file whose sample has the largest time difference
+# Find the file whose sample has the largest time difference; used to determine global time range
 baseline_file = None
 max_diff = timedelta(0)
 baseline_min, baseline_max = None, None
@@ -138,14 +135,13 @@ for filename, (min_time, max_time) in time_ranges.items():
 print(f"Baseline file: {baseline_file} with time range {baseline_min} to {baseline_max}")
 
 # --- Second Pass: Gather Flows for Plotting ---
-# For the baseline device, keep the 20 flows from the sample.
-# For the other devices, collect ALL flows within [baseline_min, baseline_max].
+# For the baseline file, use the sample flows; for the others, collect ALL flows within [baseline_min, baseline_max].
 file_flow_dict = {}
 
 for filename in selected_files:
     file_path = os.path.join(folder_path, filename)
     flows_to_plot = []
-
+    
     if filename == baseline_file:
         flows_to_plot = sample_flow_dict[filename]
     else:
@@ -180,24 +176,22 @@ for filename in selected_files:
         file_flow_dict[filename] = flows_to_plot
 
 # --- Plotting Setup ---
+# Using the baseline's time range to keep a consistent x-axis across all plots
 global_min_time = baseline_min
 global_max_time = baseline_max
 time_margin = (global_max_time - global_min_time) * 0.1
 x_min = global_min_time - time_margin
 x_max = global_max_time + time_margin
 
-n_files = len(file_flow_dict)
-fig, axes = plt.subplots(n_files, 1, figsize=(2.0 * 5 * n_files, 5 * n_files), sharex=True)
-if n_files == 1:
-    axes = [axes]
-
 # Grouping resolution in days
 resolution = min_arrow_distance / (24 * 3600)
 
-# --- Plot Each File in its Subplot ---
-for ax, (filename, flows_to_plot) in zip(axes, file_flow_dict.items()):
+# --- Create Separate Plot for Each File ---
+for filename, flows_to_plot in file_flow_dict.items():
+    # Create new figure for each file
+    fig, ax = plt.subplots(figsize=(12.6, 5))
     ax.xaxis_date()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M:%S"))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
     
     # Group flows by close timestamps
     grouped_flows = {}
@@ -206,54 +200,54 @@ for ax, (filename, flows_to_plot) in zip(axes, file_flow_dict.items()):
         rounded_base_x = round(base_x / resolution) * resolution
         grouped_flows.setdefault(rounded_base_x, []).append(flow)
     
-    # Plot each group, stacking flows with integer y-values
+    # Plot each group, stacking flows with integer y-values.
+    # (Note: The inner loop sets idx = 0 for each group; adjust if you require stacking.)
     for base_x, group in grouped_flows.items():
         group.sort(key=lambda f: f["start_time"])
         for idx, flow in enumerate(group):
             color = universal_color_map.get(flow["key"], "black")
-            # Arrows from y=idx to y=idx+1
-            idx = 0
+            # Arrows from y=idx to y=idx+1; current version resets idx to 0 for each group.
             ax.annotate(
                 "",
-                xy=(base_x, idx + 1),
-                xytext=(base_x, idx),
+                xy=(base_x, 0 + 1),
+                xytext=(base_x, 0),
                 arrowprops=dict(arrowstyle="->", color=color, lw=1.5)
             )
-            print(f"XY: : {(base_x, idx + 1)}")
+            print(f"{filename} Flow: {(base_x, 1)}")
     
-    # X-limit is consistent for all subplots
+    # Set x-axis limits (consistent across all files)
     ax.set_xlim(mdates.date2num(x_min), mdates.date2num(x_max))
     
-    # Y-limit: from 0 up to the max number of flows that appear together
-    max_flows_at_once = 1#max(len(g) for g in grouped_flows.values()) if grouped_flows else 1
+    # Y-axis settings
+    max_flows_at_once = 1  # adjust if you require stacking beyond one flow per time instance
     ax.set_ylim(0, max_flows_at_once + 1)
-    ax.set_yticks(range(max_flows_at_once + 1))
-    # Labeling
-    ax.set_ylabel("Number of flows at one time instance")
+    # ax.set_yticks(range(max_flows_at_once + 1))
+    ax.set_yticks([])
+    ax.set_ylabel('')
+    # Labeling for this plot
+    # ax.set_ylabel("Number of flows at one time instance")
     ax.set_title(f"Flow Timeline ({filename})")
     ax.set_xlabel("Time (Date and Time)")
-
-    # Create a legend for this subplot (protocol/port)
+    
+    # Create legend for protocol/port used in the flows
     keys_in_plot = {flow["key"] for flow in flows_to_plot}
-    legend_handles = [mpatches.Patch(color=universal_color_map[k], label=k) for k in sorted(keys_in_plot)]
-
-    # First legend: protocol/port
+    legend_handles = [mpatches.Patch(color=universal_color_map.get(k, "grey"), label=k)
+                      for k in sorted(keys_in_plot)]
+    
+    # Add legends to the plot:
     legend1 = ax.legend(handles=legend_handles, loc="upper right", frameon=True)
-
-    # Second legend: blank box below the first one with flow count
+    ax.add_artist(legend1)
+    
     flow_count_text = f"Flow Count: {len(flows_to_plot)}"
     legend2 = ax.legend(
-        handles=[mpatches.Patch(color='white', label=flow_count_text)], 
-        loc="upper left", 
+        handles=[mpatches.Patch(color='white', label=flow_count_text)],
+        loc="upper left",
         frameon=True
     )
-
-    # Add the first legend back manually so it doesn't get removed
-    ax.add_artist(legend1)
-
-# Save the figure after plotting all files
-plt.tight_layout()
-save_path = os.path.join(save_folder, "selected_flow_timelines.svg")
-plt.savefig(save_path, format="svg", dpi=300)
-print(f"Combined plot saved to {os.path.abspath(save_path)}")
-plt.clf()
+    
+    plt.tight_layout()
+    # Save this plot as a separate SVG file
+    save_path = os.path.join(save_folder, f"{os.path.splitext(filename)[0]}_flow_timeline.svg")
+    plt.savefig(save_path, format="svg", dpi=300)
+    print(f"Plot for {filename} saved to {os.path.abspath(save_path)}")
+    plt.clf()
