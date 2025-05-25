@@ -37,7 +37,9 @@ def clean_data(target_file):
         chunk = chunk[chunk['destinationIPv4Address'].apply(lambda x: isinstance(x, str) and ':' not in x)]
         
         destination_ips = chunk['flows'].apply(lambda x: ipaddress.IPv4Address(x['destinationIPv4Address']))
-        chunk = chunk[~(destination_ips.apply(lambda x: x.is_multicast) | destination_ips.apply(lambda x: x.is_private))]
+
+        # BUGG!!!
+        # chunk = chunk[~(destination_ips.apply(lambda x: x.is_multicast) | destination_ips.apply(lambda x: x.is_private))]
 
         # Apply the process_flow logic to modify source and destination IPs
         chunk['flows'] = chunk['flows'].apply(process_flow)

@@ -2,7 +2,7 @@ import main_create_all_embeddings
 import classify_embeddings
 import sys
 import os
-
+import special
 # Define a helper function to redirect output to a file
 def redirect_output_to_file(file_path):
     # Open the file for writing
@@ -15,7 +15,7 @@ def reset_output():
 
 vector_list = [128]
 device_low = 0
-device_high = [5] #[2, 5, 10, 15, 20, 22]
+device_high = [2, 5, 10, 15, 20, 22]
 
 group_option = 0
 time_group = 0
@@ -25,19 +25,29 @@ window_group = 1
 window_size = 10
 slide_length = 1
 
-for device_high_option in device_high:
+subject = "Code Done!"
+body = "The code has been executed successfully."
 
-    # Redirect output to file for main_create_all_embeddings
-    redirect_output_to_file(f"Output1-{device_low}-{device_high_option}.txt")
-    main_create_all_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length)
-    reset_output()  # Reset output back to the console
+try:
+    for device_high_option in device_high:
+
+        # Redirect output to file for main_create_all_embeddings
+        redirect_output_to_file(f"Output1-{device_low}-{device_high_option}.txt")
+        main_create_all_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length)
+        reset_output()  # Reset output back to the console
 
 
-    # Redirect output to file for classify_embeddings
-    redirect_output_to_file(f"output3-{device_low}{device_high_option}.txt")
-    classify_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length)
-    reset_output()  # Reset output back to the console
+        # Redirect output to file for classify_embeddings
+        redirect_output_to_file(f"output3-{device_low}{device_high_option}.txt")
+        classify_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length)
+        reset_output()  # Reset output back to the console
 
-    os.rename(os.path.join(os.getcwd(), "plots"), os.path.join(os.getcwd(), f"plots_{device_high_option}"))
+        os.rename(os.path.join(os.getcwd(), "plots"), os.path.join(os.getcwd(), f"plots_{device_high_option}"))
 
-print("All scripts executed successfully and outputs saved to files.")
+    print("All scripts executed successfully and outputs saved to files.")
+    special.send_test_email(subject, body)
+
+except Exception as e:
+    error_subject = "Code Failed!"
+    error_body = f"The code encountered an error:\n\n{str(e)}"
+    special.send_test_email(error_subject, error_body)

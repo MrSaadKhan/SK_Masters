@@ -14,7 +14,7 @@ save_folder = os.path.join(current_directory, "flow_plots")
 os.makedirs(save_folder, exist_ok=True)
 
 # Number of flows to sample initially per file
-sample_num = 30
+sample_num = 80
 min_arrow_distance = 0.1  # minimum difference between arrows in seconds
 
 # --- Specify which files to process ---
@@ -76,8 +76,8 @@ for filename in selected_files:
                 # Skip IPv6 or flows where src/dst are both private
                 if ":" in src_ip or ":" in dst_ip:
                     continue
-                if ipaddress.IPv4Address(src_ip).is_private and ipaddress.IPv4Address(dst_ip).is_private:
-                    continue
+                # if ipaddress.IPv4Address(src_ip).is_private and ipaddress.IPv4Address(dst_ip).is_private:
+                #     continue
                 start_time = datetime.strptime(flow["flowStartMilliseconds"], "%Y-%m-%d %H:%M:%S.%f")
                 _ = float(flow["flowDurationMilliseconds"])  # just to ensure it parses
                 proto = int(flow["protocolIdentifier"])
@@ -191,7 +191,7 @@ for filename, flows_to_plot in file_flow_dict.items():
     # Create new figure for each file
     fig, ax = plt.subplots(figsize=(12.6, 5))
     ax.xaxis_date()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%I %p"))  # e.g., 09 AM, 10 AM
     
     # Group flows by close timestamps
     grouped_flows = {}
@@ -226,8 +226,8 @@ for filename, flows_to_plot in file_flow_dict.items():
     ax.set_ylabel('')
     # Labeling for this plot
     # ax.set_ylabel("Number of flows at one time instance")
-    ax.set_title(f"Flow Timeline ({filename})")
-    ax.set_xlabel("Time (Date and Time)")
+    # ax.set_title(f"Flow Timeline ({filename})")
+    ax.set_xlabel("Time")
     
     # Create legend for protocol/port used in the flows
     keys_in_plot = {flow["key"] for flow in flows_to_plot}

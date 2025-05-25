@@ -111,7 +111,7 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
     testing_length  = len(X_test)
 
     # Initialize and train the Random Forest classifier
-    clf = RandomForestClassifier(n_estimators=500, random_state=42)
+    clf = RandomForestClassifier(n_jobs=-1, n_estimators=500, random_state=42)
     clf.fit(X_train, y_train)
     print('RF Training completed.')
 

@@ -57,12 +57,12 @@ if __name__ == "__main__":
     
     if group_option == 0:
         group_path = 'ungrouped'
-        save_path = os.path.join(cwd, 'preprocessed_data', group_path)
+        save_path = os.path.join(cwd, 'preprocessed_datacopyyyyy', group_path)
 
     else:
         group_path = 'grouped'
         time_path = str(time_group)
-        save_path = os.path.join(cwd, 'preprocessed_data', group_path, time_path)
+        save_path = os.path.join(cwd, 'preprocessed_datacopyyyyy', group_path, time_path)
 
     if not os.path.exists(save_path):
         os.makedirs(save_path)
@@ -88,6 +88,6 @@ if __name__ == "__main__":
 
         length = ((len(seen), len(unseen)))
         print(f"Device: {device} \nSeen Length: {length[0]}\nUnseen Length: {length[1]}")
-        save_files(seen, unseen, device, save_path)
+        #save_files(seen, unseen, device, save_path)
 
     print("Complete :)")

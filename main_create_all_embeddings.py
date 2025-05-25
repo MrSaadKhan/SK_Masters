@@ -138,16 +138,16 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     seen_ft = 0
     unseen_ft = 0
 
-    new_dir = os.path.join(save_dir, 'FastText')
-    FastText_path = new_dir
-    if not os.path.exists(new_dir):
-        os.mkdir(new_dir)
+    # new_dir = os.path.join(save_dir, 'FastText')
+    # FastText_path = new_dir
+    # if not os.path.exists(new_dir):
+    #     os.mkdir(new_dir)
     
-    mem_start_FastText = psutil.virtual_memory().used / (1024 ** 2)
-    stop_event = multiprocessing.Event()  # Create the stop event
-    process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_FastText))
-    process.start()
-    start_time = time.time()
+    # mem_start_FastText = psutil.virtual_memory().used / (1024 ** 2)
+    # stop_event = multiprocessing.Event()  # Create the stop event
+    # process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_FastText))
+    # process.start()
+    # start_time = time.time()
     
     # model_filename = create_fasttext_embeddings.train_fasttext_model(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
 
@@ -159,9 +159,9 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     # print(f"FastText TOTAL memory per flow: {highest_value_without_outliers(os.path.join(FastText_path, 'memory_measurements.txt'))/(seen_ft+unseen_ft)}")
 
     
-    stop_event.set()  # Signal the memory monitor to stop
-    process.join()
-    plot_numbers_from_file(FastText_path)
+    # stop_event.set()  # Signal the memory monitor to stop
+    # process.join()
+    # plot_numbers_from_file(FastText_path)
 
     new_dir = os.path.join(save_dir, 'BERT')
     bert_path = new_dir

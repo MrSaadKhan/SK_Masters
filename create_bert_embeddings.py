@@ -5,6 +5,12 @@ from transformers import AutoModelForMaskedLM, AutoTokenizer
 import get_data
 from tqdm import tqdm
 
+
+os.environ["OMP_NUM_THREADS"] = str(os.cpu_count())
+os.environ["MKL_NUM_THREADS"] = str(os.cpu_count())
+torch.set_num_threads(os.cpu_count())
+torch.set_num_interop_threads(os.cpu_count())
+
 def fine_tune_model(model, tokenizer, combined_seen_data, device, vector_size, learning_rate, epochs):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -65,6 +71,9 @@ def create_device_embedding(model, tokenizer, file_path, device, save_dir, data_
     return len(seen), len(unseen)
 
 def create_embeddings(file_path, device_list, save_dir, data_dir, group_option, word_embedding_option, window_size, slide_length, vector_size=768, fine_tune_percent=0.9):
+    
+    fine_tune_option = False
+    
     def load_bert_model(model_name):
         # Load model for masked language modeling with output_hidden_states enabled.
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -73,12 +82,19 @@ def create_embeddings(file_path, device_list, save_dir, data_dir, group_option, 
     
     word_embed = "Grouped" if group_option else "Ungrouped"
     model_dir = os.path.join(save_dir, word_embed, f"{window_size}_{slide_length}")
-    os.makedirs(model_dir, exist_ok=True)
-    save_dir = os.path.join(model_dir, "bert_embeddings")
-    fine_tuned_save_dir = os.path.join(model_dir, "bert_embeddings_finetuned")
-    os.makedirs(save_dir, exist_ok=True)
-    os.makedirs(fine_tuned_save_dir, exist_ok=True)
     
+    # Always create the main model directory and the base save_dir
+    os.makedirs(model_dir, exist_ok=True)
+
+    save_dir = os.path.join(model_dir, "bert_embeddings")
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Only create the fine-tuned directory if fine_tune_option is True
+    if fine_tune_option:
+        fine_tuned_save_dir = os.path.join(model_dir, "bert_embeddings_finetuned")
+        os.makedirs(fine_tuned_save_dir, exist_ok=True)
+
+
     model_dict = {128: "prajjwal1/bert-tiny", 256: "prajjwal1/bert-mini", 512: "prajjwal1/bert-medium", 768: "bert-base-uncased"}
     if vector_size not in model_dict:
         print(f"Invalid vector_size. Choose from {list(model_dict.keys())}.")

@@ -22,7 +22,7 @@ nature_remo_xiaomi_mijia_led_fasttext_model_128
 /plots*
 /output0.txt
 /nnmodels
-/preprocessed_data
+/preprocessed_data*
 plots[old]/*.pdf
 plots[old]/*.svg
 plots[old]/*.png
@@ -46,3 +46,4 @@ Output1-0-5.txt
 Output1-0-10.txt
 Output1-0-5.txt
 Output1-0-10.txt
+special.py
