@@ -15,7 +15,7 @@ def reset_output():
 
 vector_list = [128]
 device_low = 0
-device_high = [2, 5, 10, 15, 20, 22]
+device_high = [22]#[2, 5, 10, 15, 20, 22]
 
 group_option = 0
 time_group = 0
