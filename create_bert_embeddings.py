@@ -56,6 +56,15 @@ def _embed_sentence(sentence):
         outputs = global_model(**inputs)
     return outputs.hidden_states[-1][0, 0, :].cpu().numpy()
 
+# def _embed_sentence(sentence):
+#     inputs = global_tokenizer(sentence, return_tensors='pt', truncation=True, padding=True, max_length=512).to(global_model.device)
+#     with torch.no_grad():
+#         outputs = global_model(**inputs)
+#     # Average the last 3 hidden states instead of using just the last one
+#     last_3_hidden_states = outputs.hidden_states[-3:]
+#     avg_hidden_state = torch.stack(last_3_hidden_states).mean(dim=0)
+#     return avg_hidden_state[0, 0, :].cpu().numpy()
+
 def create_device_embedding(model, tokenizer, file_path, device, save_dir, data_dir, vector_size=768, fine_tuned=False):
     os.makedirs(save_dir, exist_ok=True)
     suffix = "_fine_tuned" if fine_tuned else ""

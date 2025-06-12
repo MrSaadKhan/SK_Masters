@@ -10,7 +10,7 @@ import time
 import gc
 import create_plots
 import joblib
-import tensorflow as tf  # Added for neural network functionality
+# import tensorflow as tf  # Added for neural network functionality
 
 # Mapping device names to their indices
 def map_device_name(file_paths):
@@ -123,7 +123,7 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
 
     print(f"Evaluation of RF classifier at a vector size of {vector_size}")
     conf_matrix = confusion_matrix(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred, average='weighted')
+    f1 = f1_score(y_test, y_pred, average='macro')
     print(f"RF F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
 
     conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]  # Convert to percentage
@@ -165,112 +165,112 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
 
     return accuracy, file_size, training_length, testing_length
 
-def classify_embeddings_nn(folder_path, output_name, vector_size):
-    def load_embeddings(file_path):
-        embeddings = []
-        with open(file_path, 'r', encoding='utf-8') as file:
-            for line in tqdm(file, desc=f'Loading embeddings from {os.path.basename(file_path)}', unit=' vectors'):
-                vector = np.array([float(x) for x in line.strip().split()])
-                embeddings.append(vector)
-        return embeddings
+# def classify_embeddings_nn(folder_path, output_name, vector_size):
+#     def load_embeddings(file_path):
+#         embeddings = []
+#         with open(file_path, 'r', encoding='utf-8') as file:
+#             for line in tqdm(file, desc=f'Loading embeddings from {os.path.basename(file_path)}', unit=' vectors'):
+#                 vector = np.array([float(x) for x in line.strip().split()])
+#                 embeddings.append(vector)
+#         return embeddings
 
-    # List of file paths in the folder
-    file_paths = [os.path.join(folder_path, fname) for fname in os.listdir(folder_path) if fname.endswith('.txt')]
+#     # List of file paths in the folder
+#     file_paths = [os.path.join(folder_path, fname) for fname in os.listdir(folder_path) if fname.endswith('.txt')]
 
-    # Map device names to indices
-    device_to_index = map_device_name(file_paths)
+#     # Map device names to indices
+#     device_to_index = map_device_name(file_paths)
 
-    # Load embeddings and labels
-    all_embeddings = []
-    all_labels = []
-    for file_path in sorted(file_paths):
-        device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
-        device_name = ' '.join(word.capitalize() for word in device_name.split())
+#     # Load embeddings and labels
+#     all_embeddings = []
+#     all_labels = []
+#     for file_path in sorted(file_paths):
+#         device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
+#         device_name = ' '.join(word.capitalize() for word in device_name.split())
         
-        if device_name not in device_to_index:
-            print(f"Device name '{device_name}' not found in device_to_index dictionary.")
-            continue
+#         if device_name not in device_to_index:
+#             print(f"Device name '{device_name}' not found in device_to_index dictionary.")
+#             continue
         
-        device_index = device_to_index[device_name]
-        device_embeddings = load_embeddings(file_path)
-        labels = [device_index] * len(device_embeddings)
-        all_embeddings.extend(device_embeddings)
-        all_labels.extend(labels)
+#         device_index = device_to_index[device_name]
+#         device_embeddings = load_embeddings(file_path)
+#         labels = [device_index] * len(device_embeddings)
+#         all_embeddings.extend(device_embeddings)
+#         all_labels.extend(labels)
 
-    # Convert to numpy arrays
-    all_embeddings = np.array(all_embeddings)
-    all_labels = np.array(all_labels)
+#     # Convert to numpy arrays
+#     all_embeddings = np.array(all_embeddings)
+#     all_labels = np.array(all_labels)
 
-    # Split into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(all_embeddings, all_labels, test_size=0.2, stratify=all_labels, random_state=42)
-    training_length = len(X_train)
-    testing_length = len(X_test)
+#     # Split into training and testing sets
+#     X_train, X_test, y_train, y_test = train_test_split(all_embeddings, all_labels, test_size=0.2, stratify=all_labels, random_state=42)
+#     training_length = len(X_train)
+#     testing_length = len(X_test)
     
-    n_classes = len(device_to_index)
-    # Build a simple feed-forward neural network
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(vector_size,)),
-        tf.keras.layers.Dense(512, activation='relu'),
-        tf.keras.layers.Dense(n_classes, activation='softmax')
-    ])
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-    model.fit(X_train, y_train, epochs=20, batch_size=64, verbose=0)
+#     n_classes = len(device_to_index)
+#     # Build a simple feed-forward neural network
+#     model = tf.keras.Sequential([
+#         tf.keras.layers.Input(shape=(vector_size,)),
+#         tf.keras.layers.Dense(512, activation='relu'),
+#         tf.keras.layers.Dense(n_classes, activation='softmax')
+#     ])
+#     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+#     model.fit(X_train, y_train, epochs=20, batch_size=64, verbose=0)
     
-    # Predict on test set
-    y_pred_prob = model.predict(X_test)
-    y_pred = np.argmax(y_pred_prob, axis=1)
+#     # Predict on test set
+#     y_pred_prob = model.predict(X_test)
+#     y_pred = np.argmax(y_pred_prob, axis=1)
 
-    print(f"Evaluation of NN classifier at a vector size of {vector_size}")
-    conf_matrix = confusion_matrix(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred, average='weighted')
-    print(f"NN F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
+#     print(f"Evaluation of NN classifier at a vector size of {vector_size}")
+#     conf_matrix = confusion_matrix(y_test, y_pred)
+#     f1 = f1_score(y_test, y_pred, average='macro')
+#     print(f"NN F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
     
-    conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]
-    device_names = sorted(device_to_index, key=device_to_index.get)
-    device_names = plot_device_names(device_names)
+#     conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]
+#     device_names = sorted(device_to_index, key=device_to_index.get)
+#     device_names = plot_device_names(device_names)
 
-    # Dynamically compute font size based on the confusion matrix dimensions
-    matrix_size = conf_matrix_percent.shape[0]
-    font_size = 100 / matrix_size  # Tweak scaling factor as needed
-    print(f"Font size = {font_size}")
+#     # Dynamically compute font size based on the confusion matrix dimensions
+#     matrix_size = conf_matrix_percent.shape[0]
+#     font_size = 100 / matrix_size  # Tweak scaling factor as needed
+#     print(f"Font size = {font_size}")
     
-    disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix_percent, display_labels=device_names)
-    fig, ax = plt.subplots(figsize=(8, 6))
-    if len(X_test) > 10:
-        fig, ax = plt.subplots(figsize=(16, 12))
-    disp.plot(cmap=plt.cm.Blues, ax=ax, values_format=".2f", text_kw={'fontsize': font_size})
+#     disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix_percent, display_labels=device_names)
+#     fig, ax = plt.subplots(figsize=(8, 6))
+#     if len(X_test) > 10:
+#         fig, ax = plt.subplots(figsize=(16, 12))
+#     disp.plot(cmap=plt.cm.Blues, ax=ax, values_format=".2f", text_kw={'fontsize': font_size})
     
-    # Set axis labels and tick parameters using the dynamic font size
-    ax.set_xlabel('Predicted Label', fontsize=font_size)
-    ax.set_ylabel('True Label', fontsize=font_size)
-    ax.tick_params(axis='both', which='major', labelsize=font_size)
-    ax.set_xticklabels(device_names, rotation=90, fontsize=font_size)
-    ax.set_yticklabels(device_names, fontsize=font_size)
+#     # Set axis labels and tick parameters using the dynamic font size
+#     ax.set_xlabel('Predicted Label', fontsize=font_size)
+#     ax.set_ylabel('True Label', fontsize=font_size)
+#     ax.tick_params(axis='both', which='major', labelsize=font_size)
+#     ax.set_xticklabels(device_names, rotation=90, fontsize=font_size)
+#     ax.set_yticklabels(device_names, fontsize=font_size)
     
-    plt.tight_layout()
-    ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.png', dpi=300, transparent=True)
-    ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.svg', dpi=300, transparent=True)
-    ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.pdf', dpi=300, transparent=True)
+#     plt.tight_layout()
+#     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.png', dpi=300, transparent=True)
+#     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.svg', dpi=300, transparent=True)
+#     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_nn_{vector_size}.pdf', dpi=300, transparent=True)
     
-    # Save the NN model
-    folder_path_nn = './nnmodels/'
-    os.makedirs(folder_path_nn, exist_ok=True)
-    model_file = os.path.join(folder_path_nn, f'{output_name}_nn_model_{vector_size}.h5')
-    model.save(model_file)
-    file_size_bytes = os.path.getsize(model_file)
-    file_size = file_size_bytes / (1024 * 1024)
+#     # Save the NN model
+#     folder_path_nn = './nnmodels/'
+#     os.makedirs(folder_path_nn, exist_ok=True)
+#     model_file = os.path.join(folder_path_nn, f'{output_name}_nn_model_{vector_size}.h5')
+#     model.save(model_file)
+#     file_size_bytes = os.path.getsize(model_file)
+#     file_size = file_size_bytes / (1024 * 1024)
 
-    return f1, file_size, training_length, testing_length
+#     return f1, file_size, training_length, testing_length
 
 def plot_accuracy_vs_vector_size(data):
     bert_data = [item for item in data if 'bert_embeddings' in item[1] and 'nn' not in item[1]]
     fasttext_data = [item for item in data if 'fast_text_embeddings' in item[1] and 'nn' not in item[1]]
-    nn_data = [item for item in data if 'nn' in item[1]]
+    # nn_data = [item for item in data if 'nn' in item[1]]
 
     plt.figure(figsize=(12, 6))
     plt.plot([item[0] for item in bert_data], [item[2] for item in bert_data], marker='x', linestyle='dashed', label='BERT (RF)')
     plt.plot([item[0] for item in fasttext_data], [item[2] for item in fasttext_data], marker='o', label='FastText (RF)')
-    plt.plot([item[0] for item in nn_data], [item[2] for item in nn_data], marker='s', label='NN')
+    # plt.plot([item[0] for item in nn_data], [item[2] for item in nn_data], marker='s', label='NN')
     plt.xlabel('Vector Size')
     plt.ylabel('Accuracy')
     plt.legend()
@@ -341,9 +341,9 @@ def main(vector_list, device_range, vector_path, group_option, window_size, slid
                     fast_text_embeddings_classification_mem_usage = memory
 
                 # Neural Network Classification
-                nn_accuracy, nn_model_size, nn_train_length, nn_test_length = classify_embeddings_nn(folder_path, embed_name, vector_size)
-                accuracy_list.append((vector_size, option + '_nn', nn_accuracy))
-                print(f"NN Accuracy for {embed_name}: {nn_accuracy}")
+                # nn_accuracy, nn_model_size, nn_train_length, nn_test_length = classify_embeddings_nn(folder_path, embed_name, vector_size)
+                # accuracy_list.append((vector_size, option + '_nn', nn_accuracy))
+                # print(f"NN Accuracy for {embed_name}: {nn_accuracy}")
 
             else:
                 print(f"{embed_name} does not exist!")

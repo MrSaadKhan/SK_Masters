@@ -1,4 +1,5 @@
 import os
+import json
 import ipaddress
 import pandas as pd
 from datetime import datetime
@@ -9,11 +10,8 @@ def process_flow(flow):
         src_ip = ipaddress.IPv4Address(flow.get('sourceIPv4Address', ''))
         dst_ip = ipaddress.IPv4Address(flow.get('destinationIPv4Address', ''))
 
-        # Drop if both source and destination are private
         if src_ip.is_private and dst_ip.is_private:
             return None
-
-        # Replace private IPs with dummy IP
         if src_ip.is_private:
             flow['sourceIPv4Address'] = '192.168.0.1'
         if dst_ip.is_private:
@@ -25,7 +23,6 @@ def process_flow(flow):
 
 def parse_timestamp_to_ms(ts_str):
     try:
-        # Original timestamp format: "2019-06-25 08:36:38.948"
         dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")
         return int(dt.timestamp() * 1000)
     except Exception:
@@ -36,40 +33,24 @@ def extract_valid_start_times(filepath):
     start_times = []
 
     try:
-        # Count total lines to estimate progress bar length
-        total_lines = sum(1 for _ in open(filepath, 'r', encoding='utf-8', errors='ignore'))
-        total_chunks = (total_lines // chunk_size) + 1
-
+        file_size = sum(1 for _ in open(filepath, 'r', encoding='utf-8', errors='ignore'))
         chunk_iter = pd.read_json(filepath, lines=True, chunksize=chunk_size)
 
-        for chunk in tqdm(chunk_iter, total=total_chunks, desc=f"Lines in {os.path.basename(filepath)}", leave=False):
-            # Filter out rows where 'flows' is not a dict
+        for chunk in tqdm(chunk_iter, total=(file_size // chunk_size) + 1, desc=f"Lines in {os.path.basename(filepath)}", leave=False):
             chunk['flows'] = chunk['flows'].apply(lambda x: x if isinstance(x, dict) else None)
             chunk = chunk.dropna(subset=['flows'])
 
-            # Filter out multicast and private destination IPs
-            chunk['destinationIPv4Address'] = chunk['flows'].apply(lambda x: x.get('destinationIPv4Address'))
-            chunk = chunk[chunk['destinationIPv4Address'].apply(lambda ip: isinstance(ip, str) and ':' not in ip)]  # Remove IPv6 or invalid
-
-            # Apply process_flow for filtering & IP replacement
             chunk['flows'] = chunk['flows'].apply(process_flow)
             chunk = chunk[chunk['flows'].notnull()]
 
-            # Remove unwanted keys from each flow (MAC addresses etc.)
-            chunk['flows'] = chunk['flows'].apply(
-                lambda flow: {k: v for k, v in flow.items() if k not in ['sourceMacAddress', 'destinationMacAddress']}
-            )
-
-            # Extract valid start times from filtered flows
             for flow in chunk['flows']:
                 ts = flow.get('flowStartMilliseconds', '')
                 start_time = parse_timestamp_to_ms(ts)
                 if start_time >= 0:
                     start_times.append(start_time)
-
     except Exception as e:
         print(f"Error reading {filepath}: {e}")
-
+    
     return start_times
 
 def compute_average_frequency(start_times):
@@ -104,9 +85,11 @@ def main(directory, exclusion_list, n_smallest=None):
     print(f"Average flow arrival frequency: {frequency:.6f} flows/ms ({frequency * 1000:.3f} flows/sec)")
 
 if __name__ == "__main__":
-    # Change as needed
+    # Set your path and exclusions
     target_directory = r'/home/iotresearch/saad/data/KDDI-IoT-2019/ipfix'
     exclusions = ['sony_network_camera.json', 'mouse_computer_room_hub.json', 'planex_camera_one_shot!.json']
-    n_smallest_files = None  # e.g., 5 or None for all
+    
+    # Set to None to process all files, or an integer to limit to N smallest
+    n_smallest_files = None  # or e.g. 5
 
     main(target_directory, exclusions, n_smallest=n_smallest_files)
