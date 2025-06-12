@@ -1,7 +1,7 @@
 import numpy as np
 import os
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, f1_score
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, f1_score, classification_report
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from tqdm import tqdm  # Import tqdm for progress bars
@@ -125,6 +125,16 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
     conf_matrix = confusion_matrix(y_test, y_pred)
     f1 = f1_score(y_test, y_pred, average='macro')
     print(f"RF F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
+    
+    print(classification_report(y_test, y_pred, target_names=device_names))
+
+
+    # --- NEW: per-class correct/incorrect counts ---
+    for idx, name in enumerate(device_names):
+        total = conf_matrix[idx].sum()
+        correct = conf_matrix[idx, idx]
+        incorrect = total - correct
+        print(f"  Class '{name}': Total = {total},  Correct = {correct},  Incorrect = {incorrect}")
 
     conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]  # Convert to percentage
     accuracy = np.mean(np.diag(conf_matrix_percent))
