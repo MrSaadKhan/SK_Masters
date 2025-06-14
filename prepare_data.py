@@ -104,17 +104,21 @@ def prepare_data(file_path, group_option=0, time_group=0, num2word_option=0):
         remaining_items = [lst[i] for i in range(len(lst)) if i not in selected_indices]
         return selected_items, remaining_items
 
+    def deterministic_split(lst, n):
+        return lst[:n], lst[n:]
+
+
     def apply_group_data(dataset):
         if len(dataset) == 0:
             return [], []
         else:
-            unseen, seen = random_split(dataset, math.floor(0.3 * len(dataset)))
+            unseen, seen = deterministic_split(dataset, math.floor(0.3 * len(dataset)))
             return group_data.group_data(unseen, time_group), group_data.group_data(seen, time_group)
 
     if group_option == 1:
         dev1_unseen, dev1_seen = apply_group_data(dev1)
     else:
-        dev1_unseen, dev1_seen = random_split(dev1, math.floor(0.3 * num_elements[0]))
+        dev1_unseen, dev1_seen = deterministic_split(dev1, math.floor(0.3 * num_elements[0]))
 
     del dev1
 

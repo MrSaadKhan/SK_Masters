@@ -57,7 +57,7 @@ if __name__ == "__main__":
     
     if group_option == 0:
         group_path = 'ungrouped'
-        save_path = os.path.join(cwd, 'preprocessed_datacopyyyyy', group_path)
+        save_path = os.path.join(cwd, 'preprocessed_datac   opyyyyy', group_path)
 
     else:
         group_path = 'grouped'

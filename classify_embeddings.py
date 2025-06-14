@@ -105,7 +105,7 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
     all_labels = np.array(all_labels)
 
     # Split into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(all_embeddings, all_labels, test_size=0.2, stratify=all_labels, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(all_embeddings, all_labels, test_size=0.3, stratify=all_labels, random_state=42)
     
     training_length = len(X_train)
     testing_length  = len(X_test)
@@ -123,9 +123,16 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
 
     print(f"Evaluation of RF classifier at a vector size of {vector_size}")
     conf_matrix = confusion_matrix(y_test, y_pred)
+    print(f"Confusion Matrix for {vector_size}:\n{conf_matrix}")
     f1 = f1_score(y_test, y_pred, average='macro')
-    print(f"RF F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
+    print(f"RF Macro F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
+    f1 = f1_score(y_test, y_pred, average='weighted')
+    print(f"RF Weighted F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
     
+    device_names = sorted(device_to_index, key=device_to_index.get)
+    device_names = plot_device_names(device_names)
+
+
     print(classification_report(y_test, y_pred, target_names=device_names))
 
 
@@ -139,8 +146,6 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
     conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]  # Convert to percentage
     accuracy = np.mean(np.diag(conf_matrix_percent))
 
-    device_names = sorted(device_to_index, key=device_to_index.get)
-    device_names = plot_device_names(device_names)
 
     # Dynamically compute font size based on the confusion matrix dimensions
     matrix_size = conf_matrix_percent.shape[0]
