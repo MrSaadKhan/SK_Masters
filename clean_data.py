@@ -13,9 +13,11 @@ def process_flow(flow):
 
         # Replace either one if it's private
         if src_ip.is_private:
-            del flow['sourceIPv4Address']
+            # del flow['sourceIPv4Address']
+            flow['sourceIPv4Address'] = '192.168.0.1'
         if dst_ip.is_private:
-            del flow['destinationIPv4Address']
+            # del flow['destinationIPv4Address']
+            flow['destinationIPv4Address'] = '192.168.0.1'
 
         return flow
     except ValueError:
