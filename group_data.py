@@ -10,39 +10,7 @@ from datetime import datetime, timedelta
 #     return sorted_output
 
 
-def group_data(output, time_group = 5):
-    # print("Cleaning data... for " + os.path.split(target_file)[1])
-    # start_time = time.time()
-    
-    # # Step 1: Read Data in Chunks
-    # chunk_size = 10000  # Adjust the chunk size based on your system's memory
-    # filtered_data_chunks = pd.read_json(target_file, lines=True, chunksize=chunk_size)
-
-    # # Step 2: Process Each Chunk
-    # output = []
-
-    # for chunk in filtered_data_chunks:
-    #     # Handle cases where 'flows' might contain a float instead of a dictionary
-    #     chunk['destinationIPv4Address'] = chunk['flows'].apply(lambda x: x.get('destinationIPv4Address') if isinstance(x, dict) else None)
-    #     chunk = chunk[chunk['destinationIPv4Address'].apply(lambda x: isinstance(x, str) and ':' not in x)]
-        
-    #     destination_ips = chunk['flows'].apply(lambda x: ipaddress.IPv4Address(x['destinationIPv4Address']))
-    #     chunk = chunk[~(destination_ips.apply(lambda x: x.is_multicast) | destination_ips.apply(lambda x: x.is_private))]
-        
-    #     # Remove source MAC address and source IPv4 address fields
-    #     chunk['flows'] = chunk['flows'].apply(lambda x: {key: value for key, value in x.items() if key not in ['sourceMacAddress', 'sourceIPv4Address']})
-        
-    #     # Convert 'flows' column to the required format
-    #     chunk['flows'] = chunk['flows'].apply(lambda x: [str(x).replace(",", " ").replace("}", "").replace("{", "").replace("]", "").replace("[", "").replace("'", "").strip("[]")])
-    #     output.extend(chunk['flows'].tolist())
-
-    # num_elements = len([sublist for sublist in output if sublist[0] is not None])
-    # print(f"{num_elements} flows!")
-
-    # end_time = time.time()
-    # execution_time = end_time - start_time
-    # output = group_data(output)
-
+def group_data_time(output, time_group = 5):
     time_format = '%Y-%m-%d %H:%M:%S.%f'
     # Grouped in intervals. 5 mins by default
     # time_group = 5
@@ -84,20 +52,13 @@ def group_data(output, time_group = 5):
 
     return sorted_output
 
-# def print_stats(output, num_elements, execution_time):
-#     print(f"Execution Time: {execution_time:.2f} seconds")
-
-# target_file = r'C:\Users\Saad Khan\OneDrive - UNSW\University\5th Yr\T1\Thesis A\Data\au_wireless_adapter.json'
-
-# output, num_elements = clean_data(target_file)
-
-
-
-# for item1 in sorted_output:
-#     for item in item1:
-#         match = re.match(r'flowStartMilliseconds: [^ ]* [^ ]*', item).group(0).replace('flowStartMilliseconds: ', '')
-#         print(match, end=" ")
-#     print('SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK')
-
-
-# print(output)
+def group_data_number(data, window=5, stride=1):
+    grouped = []
+    for i in range(0, len(data) - window + 1, stride):
+        merged = {}
+        for j in range(window):
+            # Optional: Prefix keys with index if you want to preserve all info
+            for k, v in data[i + j].items():
+                merged[f"{k}_{j}"] = v  # Disambiguate overlapping keys
+        grouped.append(merged)
+    return grouped

@@ -1,5 +1,6 @@
 import os
 import prepare_data
+import group_data
 
 # def save_individual_file(list_of_lists, name, path):
 #     path = os.path.join(path, f'{name}.txt')
@@ -72,6 +73,9 @@ if __name__ == "__main__":
 
     device_high = 10#22
     device_low = 0
+    num_group = 5
+    stride = 1
+
 
     all_devices = os.listdir(file_path)
     filtered_devices = [device for device in all_devices if device not in exclusion_list]
@@ -88,6 +92,10 @@ if __name__ == "__main__":
 
         length = ((len(seen), len(unseen)))
         print(f"Device: {device} \nSeen Length: {length[0]}\nUnseen Length: {length[1]}")
+
+        # print(f"{seen}")
+        seen = group_data.group_data_number(seen, 5, 1)
+        unseen = group_data.group_data_number(unseen, 5, 1)
         save_files(seen, unseen, device, save_path)
 ### ADD grouping logic HERE!!!!!!!!!!
     print("Complete :)")

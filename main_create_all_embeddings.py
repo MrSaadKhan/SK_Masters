@@ -3,6 +3,7 @@ import time
 import create_fasttext_embeddings
 import create_bert_embeddings
 import create_gpt_embeddings
+import create_mamba_embeddings
 import create_plots
 import gc
 
@@ -163,21 +164,21 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     # process.join()
     # plot_numbers_from_file(FastText_path)
 
-    new_dir = os.path.join(save_dir, 'BERT')
-    bert_path = new_dir
-    if not os.path.exists(new_dir):
-        os.mkdir(new_dir)
+    # new_dir = os.path.join(save_dir, 'BERT')
+    # bert_path = new_dir
+    # if not os.path.exists(new_dir):
+    #     os.mkdir(new_dir)
     
-    mem_start_BERT = psutil.virtual_memory().used / (1024 ** 2)
-    stop_event = multiprocessing.Event()  # Create the stop event
-    process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_BERT))
-    process.start()
-    start_time = time.time()
-    seen, unseen, temp = create_bert_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
-    bert_time = time.time() - start_time
-    stop_event.set()  # Signal the memory monitor to stop
-    process.join()
-    plot_numbers_from_file(bert_path)
+    # mem_start_BERT = psutil.virtual_memory().used / (1024 ** 2)
+    # stop_event = multiprocessing.Event()  # Create the stop event
+    # process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_BERT))
+    # process.start()
+    # start_time = time.time()
+    # seen, unseen, temp = create_bert_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
+    # bert_time = time.time() - start_time
+    # stop_event.set()  # Signal the memory monitor to stop
+    # process.join()
+    # plot_numbers_from_file(bert_path)
 
     # new_dir = os.path.join(save_dir, 'GPT2')
     # GPT_path = new_dir
@@ -195,7 +196,13 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     # process.join()
     # plot_numbers_from_file(GPT_path)
 
+    new_dir = os.path.join(save_dir, 'MAMBA')
+    if not os.path.exists(new_dir):
+        os.mkdir(new_dir)
 
+    seen, unseen = create_mamba_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
+
+    temp = None
 
     if temp is not None:
         bert_embeddings_creation_time = bert_time
