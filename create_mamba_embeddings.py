@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 import get_data
 from tqdm import tqdm
 
@@ -11,33 +11,19 @@ _global_tokenizer = None
 _global_max_length = None
 
 def _init_model(model_name: str, max_length: int, hf_token: str = None):
-    """
-    Initialize global model, tokenizer, and max_length.
-    """
     global _global_model, _global_tokenizer, _global_max_length
-    print(f"[INIT] Loading model and tokenizer: {model_name} with max_length={max_length}")
     _global_max_length = max_length
-    tokenizer_kwargs = {}
-    if hf_token:
-        tokenizer_kwargs['use_auth_token'] = hf_token
-    _global_tokenizer = AutoTokenizer.from_pretrained(model_name, **tokenizer_kwargs)
-    model_kwargs = {'output_hidden_states': True, 'torch_dtype': torch.float16}
-    if hf_token:
-        model_kwargs['use_auth_token'] = hf_token
-    _global_model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        **model_kwargs
-    )
+    tok_kwargs = {}
+    if hf_token: tok_kwargs['use_auth_token'] = hf_token
+    _global_tokenizer = AutoTokenizer.from_pretrained(model_name, **tok_kwargs)
+    cfg = AutoConfig.from_pretrained(model_name)
+    cfg.output_hidden_states = True
+    mdl_kwargs = {'config': cfg, 'torch_dtype': torch.float16}
+    if hf_token: mdl_kwargs['use_auth_token'] = hf_token
+    _global_model = AutoModelForCausalLM.from_pretrained(model_name, **mdl_kwargs).to('cpu')
     _global_model.eval()
-    print("[INIT] Model and tokenizer ready.")
-
 
 def _embed_sentence(sentence: str) -> np.ndarray:
-    """
-    Tokenize and get the last hidden state for the BOS token of the sentence.
-    Uses globals initialized in _init_model.
-    """
-    print(f"[EMBED] Tokenizing sentence of length {len(sentence)}")
     inputs = _global_tokenizer(
         sentence,
         return_tensors='pt',
@@ -47,104 +33,52 @@ def _embed_sentence(sentence: str) -> np.ndarray:
     ).to(_global_model.device)
     with torch.no_grad():
         outputs = _global_model(**inputs)
-    last_hidden = outputs.hidden_states[-1][0, 0, :].cpu().numpy()
-    print("[EMBED] Obtained embedding vector.")
-    return last_hidden
+    last_hidden = outputs.hidden_states[-1][0]  # (seq_len, hidden)
+    mask = inputs['attention_mask'][0].unsqueeze(-1)  # (seq_len, 1)
+    summed = (last_hidden * mask).sum(dim=0)  # (hidden,)
+    counts = mask.sum(dim=0)  # (1,)
+    embedding = (summed / counts).cpu().numpy()  # (hidden,)
+    return embedding
 
-
-def create_device_mamba_embeddings(
-    model_name: str,
-    device: str,
-    save_dir: str,
-    data_dir: str,
-    vector_size: int = 512,
-    hf_token: str = None
-) -> tuple[int, int]:
-    """
-    Create seen and unseen embeddings for a single device using Mamba, sequentially (no multiprocessing).
-    """
-    print(f"[DEVICE] Starting embeddings for device: {device}")
+def create_device_mamba_embeddings(model_name: str, device: str, save_dir: str, data_dir: str, vector_size: int = 512, hf_token: str = None, max_total_embeddings: int = 0) -> tuple[int, int]:
+    if _global_model is None:
+        _init_model(model_name, vector_size, hf_token)
     os.makedirs(save_dir, exist_ok=True)
     seen_file = os.path.join(save_dir, f"{device}_seen_mamba_embeddings.txt")
     unseen_file = os.path.join(save_dir, f"{device}_unseen_mamba_embeddings.txt")
-
-    # Skip if already exists
     if os.path.exists(seen_file) and os.path.exists(unseen_file):
-        print(f"[DEVICE] Skipping {device}, embeddings already exist.")
         return 0, 0
-
-    # Load data
-    print(f"[DEVICE] Loading data for {device} from {data_dir}")
     seen, unseen = get_data.get_data(data_dir, device)
     seen_texts = [s[0] for s in seen]
     unseen_texts = [s[0] for s in unseen]
-    print(f"[DEVICE] Loaded {len(seen_texts)} seen and {len(unseen_texts)} unseen texts.")
-
-    # Initialize model and tokenizer once
-    _init_model(model_name, vector_size, hf_token)
-
-    # Process seen embeddings sequentially
+    if max_total_embeddings == 0:
+        seen_limit, unseen_limit = len(seen_texts), len(unseen_texts)
+    else:
+        seen_limit = min(len(seen_texts), max_total_embeddings)
+        unseen_limit = min(len(unseen_texts), max(0, max_total_embeddings - seen_limit))
     seen_count = 0
-    print(f"[DEVICE] Processing seen embeddings for {device}")
     with open(seen_file, 'w') as sf:
-        for idx, sentence in enumerate(tqdm(seen_texts, desc=f"{device} (Seen)")):
-            print(f"[DEVICE][SEEN] Embedding {idx+1}/{len(seen_texts)}")
+        for sentence in tqdm(seen_texts[:seen_limit], desc=f"{device} (Seen)"):
             vec = _embed_sentence(sentence)
             sf.write(' '.join(map(str, vec)) + '\n')
             seen_count += 1
-
-    # Process unseen embeddings sequentially
     unseen_count = 0
-    print(f"[DEVICE] Processing unseen embeddings for {device}")
     with open(unseen_file, 'w') as uf:
-        for idx, sentence in enumerate(tqdm(unseen_texts, desc=f"{device} (Unseen)")):
-            print(f"[DEVICE][UNSEEN] Embedding {idx+1}/{len(unseen_texts)}")
+        for sentence in tqdm(unseen_texts[:unseen_limit], desc=f"{device} (Unseen)"):
             vec = _embed_sentence(sentence)
             uf.write(' '.join(map(str, vec)) + '\n')
             unseen_count += 1
-
-    print(f"[DEVICE] Completed embeddings for {device}: {seen_count} seen, {unseen_count} unseen")
     return seen_count, unseen_count
 
-
-def create_embeddings(
-    file_path: str,
-    device_list: list[str],
-    save_dir: str,
-    data_dir: str,
-    group_option: int,
-    word_embedding_option: int,
-    window_size: int,
-    slide_length: int,
-    vector_size: int = 512,
-    hf_token: str = None
-) -> tuple[int, int]:
-    """
-    Generate Mamba embeddings for all devices in device_list sequentially.
-
-    Returns:
-        seen_count (int), unseen_count (int)
-    """
-    print(f"[RUN] Starting full embedding run for {len(device_list)} devices")
-    model_name = "state-spaces/mamba-2.8b-hf"
+def create_embeddings(file_path: str, device_list: list[str], save_dir: str, data_dir: str, group_option: int, word_embedding_option: int, window_size: int, slide_length: int, vector_size: int = 512, hf_token: str = None, max_total_embeddings: int = 0) -> tuple[int, int]:
+    model_name = "state-spaces/mamba-130m-hf"
+    _init_model(model_name, vector_size, hf_token)
     grouping = "Grouped" if group_option else "Ungrouped"
-    model_dir = os.path.join(save_dir, grouping, f"{window_size}_{slide_length}")
-    embeddings_dir = os.path.join(model_dir, "mamba_embeddings")
+    embeddings_dir = os.path.join(save_dir, grouping, f"{window_size}_{slide_length}", "mamba_embeddings")
     os.makedirs(embeddings_dir, exist_ok=True)
-
     total_seen = 0
     total_unseen = 0
     for device in device_list:
-        seen_cnt, unseen_cnt = create_device_mamba_embeddings(
-            model_name,
-            device,
-            embeddings_dir,
-            data_dir,
-            vector_size,
-            hf_token
-        )
-        total_seen += seen_cnt
-        total_unseen += unseen_cnt
-
-    print(f"[RUN] Completed all devices: Total seen={total_seen}, Total unseen={total_unseen}")
+        s, u = create_device_mamba_embeddings(model_name, device, embeddings_dir, data_dir, vector_size, hf_token, max_total_embeddings)
+        total_seen += s; total_unseen += u
     return total_seen, total_unseen

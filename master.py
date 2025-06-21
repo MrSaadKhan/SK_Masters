@@ -3,6 +3,9 @@ import classify_embeddings
 import sys
 import os
 import special
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 # Define a helper function to redirect output to a file
 def redirect_output_to_file(file_path):
     # Open the file for writing

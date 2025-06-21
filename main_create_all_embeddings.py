@@ -1,6 +1,6 @@
 import os
 import time
-import create_fasttext_embeddings
+# import create_fasttext_embeddings
 import create_bert_embeddings
 import create_gpt_embeddings
 import create_mamba_embeddings
