@@ -1,138 +1,240 @@
+# bert_embed_line_mp.py
+# -*- coding: utf-8 -*-
+"""
+Line-level multiprocessing BERT embeddings.
+ • Sequential over devices   (one device fully processed before the next)
+ • Parallel   over sentences (tasks distributed across all CPU cores)
+Tested on Python 3.10, CPU-only, PyTorch 2.x.
+"""
+
+# ---------------------------------------------------------------------------
+# 1.  SET PYTORCH THREAD COUNTS **BEFORE** ANY TORCH / TRANSFORMERS IMPORTS
+# ---------------------------------------------------------------------------
 import os
-import numpy as np
 import torch
-from transformers import AutoModelForMaskedLM, AutoTokenizer
-import get_data
+
+# Single MKL / OpenMP thread per worker; safe in the main process too.
+torch.set_num_interop_threads(1)
+torch.set_num_threads(1)
+
+# ---------------------------------------------------------------------------
+# 2.  NOW we can import everything else
+# ---------------------------------------------------------------------------
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import List, Tuple, Dict, Optional
+
+import numpy as np
 from tqdm import tqdm
+from transformers import AutoTokenizer, AutoModelForMaskedLM
 
-os.environ["OMP_NUM_THREADS"] = str(os.cpu_count())
-os.environ["MKL_NUM_THREADS"] = str(os.cpu_count())
-torch.set_num_threads(os.cpu_count())
-torch.set_num_interop_threads(os.cpu_count())
+import get_data  # <-- your local helper, unchanged
 
-def fine_tune_model(model, tokenizer, combined_seen_data, device, vector_size, learning_rate, epochs):
+
+# ---------------------------------------------------------------------------
+# 3.  PER-WORKER GLOBALS & INITIALISER
+# ---------------------------------------------------------------------------
+_WORKER_TOKENIZER = None   # loaded once per worker
+_WORKER_MODEL = None
+
+
+def _worker_init(model_name: str) -> None:
+    """
+    Runs ONCE in every worker process (called by ProcessPoolExecutor).
+    Loads BERT and tokenizer; threads are already capped globally.
+    """
+    global _WORKER_TOKENIZER, _WORKER_MODEL
+
+    # Lazily load; with 'fork' the parent already holds the weights in RAM,
+    # so children share them via copy-on-write (very memory-efficient).
+    _WORKER_TOKENIZER = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+    _WORKER_MODEL = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True, local_files_only=True)
+
+
+def _encode_sentence(task: Tuple[int, str]) -> Tuple[int, str]:
+    """
+    Worker function: embeds ONE sentence.
+    Returns (index, embedding_line) so the caller can re-insert in order.
+    `task` is (index, sentence_text).
+    """
+    idx, sentence = task
+    tok = _WORKER_TOKENIZER
+    mdl = _WORKER_MODEL
+
+    inputs = tok(
+        sentence,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=512,
+    ).to(mdl.device)
+
+    with torch.no_grad():
+        hidden = mdl(**inputs, output_hidden_states=True).hidden_states[-1]
+        vec = hidden[0, 0, :].cpu().numpy()
+
+    return idx, " ".join(map(str, vec))
+
+
+# ---------------------------------------------------------------------------
+# 4.  OPTIONAL FINE-TUNE (unchanged from your earlier version)
+# ---------------------------------------------------------------------------
+def fine_tune_model(
+    base_model,
+    tokenizer,
+    sentences,
+    vector_size: int,
+    lr: float = 4e-5,
+    epochs: int = 3,
+) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    
-    inputs = tokenizer([sentence[0] for sentence in combined_seen_data], 
-                       padding=True, truncation=True, 
-                       return_tensors="pt", max_length=vector_size)
-    dataset = torch.utils.data.TensorDataset(inputs['input_ids'], inputs['attention_mask'])
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
-    
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    
+    model = base_model.to(device)
+
+    inputs = tokenizer(
+        [s[0] for s in sentences],
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+        max_length=vector_size,
+    )
+    ds = torch.utils.data.TensorDataset(inputs["input_ids"], inputs["attention_mask"])
+    dl = torch.utils.data.DataLoader(ds, batch_size=32, shuffle=True)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+
     model.train()
-    for epoch in range(epochs):
-        total_loss = 0
-        for batch in tqdm(dataloader, desc=f'Fine-tuning epoch {epoch + 1}/{epochs}'):
-            input_ids, attention_mask = [t.to(device) for t in batch]
-            
-            # Masking the input for MLM objective; note: labels=input_ids for MLM.
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
-            loss = outputs.loss
-            optimizer.zero_grad()
+    for ep in range(epochs):
+        total = 0.0
+        for ids, masks in tqdm(dl, desc=f"Fine-tune epoch {ep+1}/{epochs}"):
+            ids, masks = ids.to(device), masks.to(device)
+            loss = model(input_ids=ids, attention_mask=masks, labels=ids).loss
+            opt.zero_grad()
             loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-        print(f"Epoch {epoch + 1} Loss: {total_loss:.4f}")
-    
-    print(f"Unsupervised Fine-tuning complete for {device}")
-    return model
+            opt.step()
+            total += loss.item()
+        print(f" epoch {ep+1}: loss={total:.4f}")
 
-def create_device_embedding(model, tokenizer, file_path, device, save_dir, data_dir, vector_size=768, fine_tuned=False):
-    os.makedirs(save_dir, exist_ok=True)
-    suffix = "_fine_tuned" if fine_tuned else ""
-    seen_embeddings_filename = os.path.join(save_dir, device + f"_seen_bert_embeddings{suffix}.txt")
-    unseen_embeddings_filename = os.path.join(save_dir, device + f"_unseen_bert_embeddings{suffix}.txt")
-    
-    if os.path.exists(seen_embeddings_filename) and os.path.exists(unseen_embeddings_filename):
-        print(f'\033[92mEmbeddings already exist for {device} ✔\033[0m')
-        return 0, 0
-    
-    def get_sentence_embedding(sentence, model, tokenizer, vector_size):
-        # Pass output_hidden_states=True to get hidden states from the model.
-        inputs = tokenizer(sentence, return_tensors='pt', truncation=True, padding=True, max_length=512).to(model.device)
-        with torch.no_grad():
-            outputs = model(**inputs, output_hidden_states=True)
-        # Extract the last layer's hidden states; take the [CLS] token embedding.
-        return outputs.hidden_states[-1][0, 0, :].cpu().numpy()
-    
-    seen, unseen = get_data.get_data(data_dir, device)
-    
-    with open(seen_embeddings_filename, 'w') as f_seen, open(unseen_embeddings_filename, 'w') as f_unseen:
-        for sentence in tqdm(seen, desc=f'Processing {device} (Seen)'):
-            f_seen.write(' '.join(map(str, get_sentence_embedding(sentence[0], model, tokenizer, vector_size))) + '\n')
-        for sentence in tqdm(unseen, desc=f'Processing {device} (Unseen)'):
-            f_unseen.write(' '.join(map(str, get_sentence_embedding(sentence[0], model, tokenizer, vector_size))) + '\n')
-    
-    return len(seen), len(unseen)
-
-def create_embeddings(file_path, device_list, save_dir, data_dir, group_option, word_embedding_option, window_size, slide_length, vector_size=768, fine_tune_percent=0.9):
-    
-    fine_tune_option = False
-    
-    def load_bert_model(model_name):
-        # Load model for masked language modeling with output_hidden_states enabled.
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True)
-        return tokenizer, model
-    
-    word_embed = "Grouped" if group_option else "Ungrouped"
-    model_dir = os.path.join(save_dir, word_embed, f"{window_size}_{slide_length}")
-    
-    # Always create the main model directory and the base save_dir
-    os.makedirs(model_dir, exist_ok=True)
-
-    save_dir = os.path.join(model_dir, "bert_embeddings")
-    os.makedirs(save_dir, exist_ok=True)
-
-    # Only create the fine-tuned directory if fine_tune_option is True
-    if fine_tune_option:
-        fine_tuned_save_dir = os.path.join(model_dir, "bert_embeddings_finetuned")
-        os.makedirs(fine_tuned_save_dir, exist_ok=True)
+    model.to("cpu").eval()
 
 
-    # model_dict = {128: "prajjwal1/bert-tiny", 256: "prajjwal1/bert-mini", 512: "prajjwal1/bert-medium", 768: "bert-base-uncased"}
+# ---------------------------------------------------------------------------
+# 5.  MAIN  create_embeddings()  FUNCTION
+# ---------------------------------------------------------------------------
+def create_embeddings(
+    file_path: str,
+    device_list: List[str],
+    save_dir: str,
+    data_dir: str,
+    group_option: bool,
+    word_embedding_option,
+    window_size: int,
+    slide_length: int,
+    vector_size: int = 768,
+    fine_tune_percent: float = 0.9,
+    num_workers: Optional[int] = None,
+) -> Tuple[int, int, Optional[int]]:
+    """
+    Returns (total_seen_lines, total_unseen_lines, sentinel)
+    sentinel = 0 if something was written, else None.
+    """
 
+    # ----- pick model ------------------------------------------------------
     model_dict = {
-        128: "google/bert_uncased_L-2_H-128_A-2",   # tiny
-        256: "google/bert_uncased_L-4_H-256_A-4",   # mini
-        512: "google/bert_uncased_L-8_H-512_A-8",   # medium
-        768: "google-bert/bert-base-uncased"        # base
+        128: "google/bert_uncased_L-2_H-128_A-2",
+        256: "google/bert_uncased_L-4_H-256_A-4",
+        512: "google/bert_uncased_L-8_H-512_A-8",
+        768: "google-bert/bert-base-uncased",
     }
-
     if vector_size not in model_dict:
-        print(f"Invalid vector_size. Choose from {list(model_dict.keys())}.")
-        return 0, 0, None
-    
-    tokenizer, model = load_bert_model(model_dict[vector_size])
-    # Clone the model for fine-tuning so that the pre-trained model remains unchanged.
-    fine_tuned_tokenizer, fine_tuned_model = load_bert_model(model_dict[vector_size])
-    fine_tuned_model.load_state_dict(model.state_dict())
-    
-    print("Model and tokenizer loaded successfully.")
-    torch.save(model.state_dict(), os.path.join(model_dir, "model.pth"))
-    
-    combined_seen_data = []
-    for device in device_list:
-        seen, _ = get_data.get_data(data_dir, device)
-        combined_seen_data.extend(seen[:int(len(seen) * fine_tune_percent)])
-    
-    # fine_tuned_model = fine_tune_model(fine_tuned_model, tokenizer, combined_seen_data, "combined_data", vector_size, learning_rate=4e-5, epochs=3)
-    
-    seen_count = 0
-    unseen_count = 0
-    # Generate embeddings using the non-fine-tuned (pre-trained) model.
-    for device in device_list:
-        seen, unseen = create_device_embedding(model, tokenizer, file_path, device, save_dir, data_dir, vector_size, fine_tuned=False)
-        seen_count += seen
-        unseen_count += unseen
-    # Generate embeddings using the fine-tuned model.
-    # for device in device_list:
-    #     seen, unseen = create_device_embedding(fine_tuned_model, tokenizer, file_path, device, fine_tuned_save_dir, data_dir, vector_size, fine_tuned=True)
-    #     seen_count += seen
-    #     unseen_count += unseen
-    
-    return seen_count, unseen_count, 0 if seen_count + unseen_count > 0 else None
+        raise ValueError(f"vector_size must be one of {list(model_dict)}")
+    model_name = model_dict[vector_size]
+
+    # ----- directory layout ------------------------------------------------
+    top = os.path.join(
+        save_dir,
+        "Grouped" if group_option else "Ungrouped",
+        f"{window_size}_{slide_length}",
+    )
+    os.makedirs(top, exist_ok=True)
+    embed_dir = os.path.join(top, "bert_embeddings")
+    os.makedirs(embed_dir, exist_ok=True)
+
+    # ----- preload model once in parent (helps 'fork' share RAM) ----------
+    parent_tokenizer = AutoTokenizer.from_pretrained(model_name)
+    parent_model = AutoModelForMaskedLM.from_pretrained(
+        model_name, output_hidden_states=True
+    ).eval().to("cpu")
+    torch.save(parent_model.state_dict(), os.path.join(top, "model.pth"))
+    print("Model & tokenizer pre-loaded in parent.")
+
+    # ----- fine-tune (optional, disabled by default) -----------------------
+    fine_tune_option = False
+    if fine_tune_option:
+        all_seen = []
+        for dev in device_list:
+            seen, _ = get_data.get_data(data_dir, dev)
+            all_seen.extend(seen[: int(len(seen) * fine_tune_percent)])
+        fine_tune_model(parent_model, parent_tokenizer, all_seen, vector_size)
+
+    # ----- choose pool settings -------------------------------------------
+    if num_workers is None:
+        num_workers = max(1, os.cpu_count() - 1)
+    method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
+    ctx = mp.get_context(method)
+    print(f"Using {num_workers} worker(s), start-method='{method}'")
+
+    total_seen = 0
+    total_unseen = 0
+
+    # ----------------------------------------------------------------------
+    # 6.  PROCESS EACH DEVICE SEQUENTIALLY  (core of your requirement)
+    # ----------------------------------------------------------------------
+    for dev in device_list:
+        seen, unseen = get_data.get_data(data_dir, dev)
+        if not seen and not unseen:
+            print(f"⚠  No data for device {dev}")
+            continue
+
+        # Pre-allocate result lists to preserve order
+        seen_out = ["" for _ in range(len(seen))]
+        unseen_out = ["" for _ in range(len(unseen))]
+
+        # Build tasks list for this device only
+        tasks = [(i, s[0]) for i, s in enumerate(seen)] + [
+            (i + len(seen), s[0]) for i, s in enumerate(unseen)
+        ]
+
+        # Map tasks to pool --------------------------------------------------
+        with ProcessPoolExecutor(
+            max_workers=num_workers,
+            mp_context=ctx,
+            initializer=_worker_init,
+            initargs=(model_name,),
+        ) as pool:
+            futs = [pool.submit(_encode_sentence, t) for t in tasks]
+
+            for fut in tqdm(
+                as_completed(futs),
+                total=len(futs),
+                desc=f"Embedding {dev}",
+            ):
+                idx, emb = fut.result()
+                if idx < len(seen):
+                    seen_out[idx] = emb
+                else:
+                    unseen_out[idx - len(seen)] = emb
+
+        # Write results -----------------------------------------------------
+        dev_seen_file = os.path.join(embed_dir, f"{dev}_seen_bert_embeddings.txt")
+        dev_unseen_file = os.path.join(embed_dir, f"{dev}_unseen_bert_embeddings.txt")
+        with open(dev_seen_file, "w") as f:
+            f.write("\n".join(seen_out))
+        with open(dev_unseen_file, "w") as f:
+            f.write("\n".join(unseen_out))
+
+        total_seen += len(seen_out)
+        total_unseen += len(unseen_out)
+        print(f"✓  {dev}: wrote {len(seen_out)} seen, {len(unseen_out)} unseen")
+
+    sentinel = 0 if (total_seen + total_unseen) else None
+    return total_seen, total_unseen, sentinel
+

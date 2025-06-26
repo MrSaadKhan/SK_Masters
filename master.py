@@ -16,7 +16,7 @@ def reset_output():
     sys.stdout.close()
     sys.stdout = sys.__stdout__
 
-vector_list = [512]
+vector_list = [768]#[512]
 device_low = 0
 device_high = [5]#[2, 5, 10, 15, 20, 22]
 

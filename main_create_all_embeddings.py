@@ -102,7 +102,7 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     exclusion_list = ['sony_network_camera.json', 'mouse_computer_room_hub.json', 'planex_camera_one_shot!.json']
 
     # List of files to always include (if they exist)
-    inclusion_list = []#['irobot_roomba.json', 'nature_remo.json']
+    inclusion_list = ['irobot_roomba.json', 'nature_remo.json']
 
     # Get a list of all devices in the directory
     all_devices = os.listdir(file_path)
