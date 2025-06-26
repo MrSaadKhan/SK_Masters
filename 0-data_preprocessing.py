@@ -94,8 +94,8 @@ if __name__ == "__main__":
         print(f"Device: {device} \nSeen Length: {length[0]}\nUnseen Length: {length[1]}")
 
         # print(f"{seen}")
-        # seen = group_data.group_data_number(seen, 5, 1)
-        # unseen = group_data.group_data_number(unseen, 5, 1)
+        seen = group_data.group_data_number(seen, 5, 1)
+        unseen = group_data.group_data_number(unseen, 5, 1)
         save_files(seen, unseen, device, save_path)
 ### ADD grouping logic HERE!!!!!!!!!!
     print("Complete :)")
