@@ -4,6 +4,10 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 import get_data
 from tqdm import tqdm
+from transformers.utils import logging
+
+# Suppress unnecessary HF warnings
+logging.set_verbosity_error()
 
 # Globals for model and tokenizer
 _global_model = None
@@ -40,7 +44,15 @@ def _embed_sentence(sentence: str) -> np.ndarray:
     embedding = (summed / counts).cpu().numpy()  # (hidden,)
     return embedding
 
-def create_device_mamba_embeddings(model_name: str, device: str, save_dir: str, data_dir: str, vector_size: int = 512, hf_token: str = None, max_total_embeddings: int = 0) -> tuple[int, int]:
+def create_device_mamba_embeddings(
+    model_name: str,
+    device: str,
+    save_dir: str,
+    data_dir: str,
+    vector_size: int = 512,
+    hf_token: str = None,
+    max_total_embeddings: int = 0
+) -> tuple[int, int]:
     if _global_model is None:
         _init_model(model_name, vector_size, hf_token)
     os.makedirs(save_dir, exist_ok=True)
@@ -51,11 +63,16 @@ def create_device_mamba_embeddings(model_name: str, device: str, save_dir: str, 
     seen, unseen = get_data.get_data(data_dir, device)
     seen_texts = [s[0] for s in seen]
     unseen_texts = [s[0] for s in unseen]
+
     if max_total_embeddings == 0:
         seen_limit, unseen_limit = len(seen_texts), len(unseen_texts)
     else:
-        seen_limit = min(len(seen_texts), max_total_embeddings)
-        unseen_limit = min(len(unseen_texts), max(0, max_total_embeddings - seen_limit))
+        seen_target = int(max_total_embeddings * 0.7)
+        unseen_target = max_total_embeddings - seen_target
+
+        seen_limit = min(len(seen_texts), seen_target)
+        unseen_limit = min(len(unseen_texts), unseen_target)
+
     seen_count = 0
     with open(seen_file, 'w') as sf:
         for sentence in tqdm(seen_texts[:seen_limit], desc=f"{device} (Seen)"):
@@ -70,7 +87,19 @@ def create_device_mamba_embeddings(model_name: str, device: str, save_dir: str, 
             unseen_count += 1
     return seen_count, unseen_count
 
-def create_embeddings(file_path: str, device_list: list[str], save_dir: str, data_dir: str, group_option: int, word_embedding_option: int, window_size: int, slide_length: int, vector_size: int = 512, hf_token: str = None, max_total_embeddings: int = 0) -> tuple[int, int]:
+def create_embeddings(
+    file_path: str,
+    device_list: list[str],
+    save_dir: str,
+    data_dir: str,
+    group_option: int,
+    word_embedding_option: int,
+    window_size: int,
+    slide_length: int,
+    vector_size: int = 512,
+    hf_token: str = None,
+    max_total_embeddings: int = 860
+) -> tuple[int, int]:
     model_name = "state-spaces/mamba-130m-hf"
     _init_model(model_name, vector_size, hf_token)
     grouping = "Grouped" if group_option else "Ungrouped"
@@ -80,5 +109,6 @@ def create_embeddings(file_path: str, device_list: list[str], save_dir: str, dat
     total_unseen = 0
     for device in device_list:
         s, u = create_device_mamba_embeddings(model_name, device, embeddings_dir, data_dir, vector_size, hf_token, max_total_embeddings)
-        total_seen += s; total_unseen += u
+        total_seen += s
+        total_unseen += u
     return total_seen, total_unseen

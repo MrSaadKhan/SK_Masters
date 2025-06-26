@@ -57,8 +57,9 @@ def group_data_number(data, window=5, stride=1):
     for i in range(0, len(data) - window + 1, stride):
         merged = {}
         for j in range(window):
-            # Optional: Prefix keys with index if you want to preserve all info
             for k, v in data[i + j].items():
-                merged[f"{k}_{j}"] = v  # Disambiguate overlapping keys
+                merged[f"{k}_{j}"] = v
+            # Add a separator after each item, if useful
+            merged[f"SEP_{j}"] = '. '
         grouped.append(merged)
     return grouped

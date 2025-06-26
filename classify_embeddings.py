@@ -317,8 +317,8 @@ def main(vector_list, device_range, vector_path, group_option, window_size, slid
     else:
         group_option = "Grouped"
 
-    embed_options = ["bert_embeddings", "bert_embeddings_finetuned", "fast_text_embeddings", "gpt2_embeddings"]  # Embedding options
-    more_options = ["BERT", "BERT", "FastText", "GPT2"]
+    embed_options = ["bert_embeddings", "bert_embeddings_finetuned", "fast_text_embeddings", "gpt2_embeddings", "mamba_embeddings"]  # Embedding options
+    more_options = ["BERT", "BERT", "FastText", "GPT2", "MAMBA"]
 
     accuracy_list = []  # List to store accuracies
 
