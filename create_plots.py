@@ -2,51 +2,43 @@ import os
 import matplotlib.pyplot as plt
 
 def plot_graphs_embedder(stats_list, vector_list, time_descriptions, memory_descriptions):
-    # Create and save the Embeddings Creation Time plot
     plt.figure(figsize=(12, 6))
     plt.grid(True)
     for i, desc in enumerate(time_descriptions):
         if desc == "FastText Training":
-            continue  # Skip plotting FastText Training Time
-        elif desc == "BERT":
-            times = [stats[0][i] for stats in stats_list]
-            plt.plot(vector_list, times, marker='x', linestyle='dashed', label='BERT')
+            continue
+        times = [stats[0][i] for stats in stats_list]
+        if desc == "BERT":
+            plt.plot(vector_list, times, marker='x', linestyle='dashed', label=desc)
         else:
-            times = [stats[0][i] for stats in stats_list]
-            plt.plot(vector_list, times, marker='o', label='FastText')
-    # plt.title('Embeddings Creation Time')
+            plt.plot(vector_list, times, marker='o', label=desc)
     plt.xlabel('Vector Size')
     plt.ylabel('Time (sec)')
     plt.yscale('log')
     plt.legend()
     plt.tight_layout()
-    if not os.path.exists('plots'):
-        os.makedirs('plots')
-    plt.savefig('plots/embeddings_creation_time_plot.svg', format='svg', dpi=300, transparent=True)
-    plt.savefig('plots/embeddings_creation_time_plot.png', format='png', dpi=300, transparent=True)
-    plt.savefig('plots/embeddings_creation_time_plot.pdf', format='pdf', dpi=300, transparent=True)
+    os.makedirs('plots', exist_ok=True)
+    for ext in ('svg', 'png', 'pdf'):
+        plt.savefig(f'plots/embeddings_creation_time_plot.{ext}', format=ext, dpi=300, transparent=True)
     plt.close()
 
-    # Create and save the Embeddings Creation Memory plot
+    # Embeddings Creation Memory plot
     plt.figure(figsize=(12, 6))
     plt.grid(True)
     for i, desc in enumerate(memory_descriptions):
         if desc == "FastText Training":
-            continue  # Skip plotting FastText Training Memory Usage per Flow
-        elif desc == "BERT":
-            memories = [stats[1][i] for stats in stats_list]
-            plt.plot(vector_list, memories, marker='x', linestyle='dashed', label='BERT')
+            continue
+        memories = [stats[1][i] for stats in stats_list]
+        if desc == "BERT":
+            plt.plot(vector_list, memories, marker='x', linestyle='dashed', label=desc)
         else:
-            memories = [stats[1][i] for stats in stats_list]
-            plt.plot(vector_list, memories, marker='o', label='FastText')
-    # plt.title('Embeddings Creation Memory Usage')
+            plt.plot(vector_list, memories, marker='o', label=desc)
     plt.xlabel('Vector Size')
     plt.ylabel('Memory (MB)')
     plt.legend()
     plt.tight_layout()
-    plt.savefig('plots/embeddings_creation_memory_plot.svg', format='svg', dpi=300, transparent=True)
-    plt.savefig('plots/embeddings_creation_memory_plot.png', format='png', dpi=300, transparent=True)
-    plt.savefig('plots/embeddings_creation_memory_plot.pdf', format='pdf', dpi=300, transparent=True)
+    for ext in ('svg', 'png', 'pdf'):
+        plt.savefig(f'plots/embeddings_creation_memory_plot.{ext}', format=ext, dpi=300, transparent=True)
     plt.close()
 
 def plot_fasttext_training(stats_list, vector_list):

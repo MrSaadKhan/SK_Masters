@@ -16,9 +16,9 @@ def reset_output():
     sys.stdout.close()
     sys.stdout = sys.__stdout__
 
-vector_list = [128]
+vector_list = [512]
 device_low = 0
-device_high = [10]#[2, 5, 10, 15, 20, 22]
+device_high = [5]#[2, 5, 10, 15, 20, 22]
 
 group_option = 0
 time_group = 0

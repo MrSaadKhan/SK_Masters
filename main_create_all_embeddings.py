@@ -101,6 +101,9 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     # List of files to exclude
     exclusion_list = ['sony_network_camera.json', 'mouse_computer_room_hub.json', 'planex_camera_one_shot!.json']
 
+    # List of files to always include (if they exist)
+    inclusion_list = []#['irobot_roomba.json', 'nature_remo.json']
+
     # Get a list of all devices in the directory
     all_devices = os.listdir(file_path)
     # Filter out devices that are in the exclusion list
@@ -109,6 +112,14 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     devices_sorted = sorted(filtered_devices, key=lambda device: os.path.getsize(os.path.join(file_path, device)))
     # Select the five smallest devices from the sorted list
     device_list = devices_sorted[device_low:device_high]
+    # Add inclusion list items to the front if not already in the list
+    for device in inclusion_list:
+        if device in devices_sorted and device not in device_list:
+            device_list.insert(0, device)
+
+    # Trim the list to maintain the original length
+    device_list = device_list[:device_high - device_low]
+
     print(device_list)
 
     gc.collect()
@@ -164,21 +175,21 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     # process.join()
     # plot_numbers_from_file(FastText_path)
 
-    # new_dir = os.path.join(save_dir, 'BERT')
-    # bert_path = new_dir
-    # if not os.path.exists(new_dir):
-    #     os.mkdir(new_dir)
+    new_dir = os.path.join(save_dir, 'BERT')
+    bert_path = new_dir
+    if not os.path.exists(new_dir):
+        os.mkdir(new_dir)
     
-    # mem_start_BERT = psutil.virtual_memory().used / (1024 ** 2)
-    # stop_event = multiprocessing.Event()  # Create the stop event
-    # process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_BERT))
-    # process.start()
-    # start_time = time.time()
-    # seen, unseen, temp = create_bert_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
-    # bert_time = time.time() - start_time
-    # stop_event.set()  # Signal the memory monitor to stop
-    # process.join()
-    # plot_numbers_from_file(bert_path)
+    mem_start_BERT = psutil.virtual_memory().used / (1024 ** 2)
+    stop_event = multiprocessing.Event()  # Create the stop event
+    process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_BERT))
+    process.start()
+    start_time = time.time()
+    seen, unseen, temp = create_bert_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
+    bert_time = time.time() - start_time
+    stop_event.set()  # Signal the memory monitor to stop
+    process.join()
+    plot_numbers_from_file(bert_path)
 
     # new_dir = os.path.join(save_dir, 'GPT2')
     # GPT_path = new_dir
@@ -195,13 +206,25 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     # stop_event.set()  # Signal the memory monitor to stop
     # process.join()
     # plot_numbers_from_file(GPT_path)
+    ##########################################################
+    # mem_start_MAMBA = psutil.virtual_memory().used / (1024 ** 2)
+    # stop_event = multiprocessing.Event()
+    # process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_MAMBA))
+    # process.start()
+    # start_time = time.time()
 
-    new_dir = os.path.join(save_dir, 'MAMBA')
-    if not os.path.exists(new_dir):
-        os.mkdir(new_dir)
+    # new_dir = os.path.join(save_dir, 'MAMBA')
+    # if not os.path.exists(new_dir):
+    #     os.mkdir(new_dir)
 
-    seen, unseen = create_mamba_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
+    # seen, unseen = create_mamba_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
 
+    # mamba_time = time.time() - start_time
+    # stop_event.set()
+    # process.join()
+    # plot_numbers_from_file(new_dir)
+    # mamba_mem_usage = highest_value_without_outliers(os.path.join(new_dir, "memory_measurements_MAMBA.txt"))
+################################################
     temp = None
 
     if temp is not None:
@@ -211,7 +234,7 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
         bert_embeddings_creation_time = 0
         bert_embeddings_creation_mem_usage = 0
 
-    total = seen + unseen
+    total = 0#seen + unseen
     if total == 0:
         total = seen_ft + unseen_ft
         unseen = unseen_ft
@@ -221,11 +244,14 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     if total != 0:
         # times = (fast_text_training_time/unseen, fast_text_embeddings_creation_time/total, bert_embeddings_creation_time/total)
         # memories = (fast_text_training_mem_usage/unseen, fast_text_embeddings_creation_mem_usage/total, bert_embeddings_creation_mem_usage/total)
-        times = (0, 0, bert_embeddings_creation_time/total)
-        memories = (0, 0, bert_embeddings_creation_mem_usage/total)
+        # times = (0, 0, bert_embeddings_creation_time/total)
+        # memories = (0, 0, bert_embeddings_creation_mem_usage/total)
+        times = (0, 0, bert_embeddings_creation_time/total, mamba_time/total)
+        memories = (0, 0, bert_embeddings_creation_mem_usage/total, mamba_mem_usage/total)
+
 
     else:
-        times = (0, 0, 0)
+        times = (0, 0, 0, 0)
         memories = times
 
     return times, memories
