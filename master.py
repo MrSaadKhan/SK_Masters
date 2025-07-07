@@ -2,6 +2,7 @@ import main_create_all_embeddings
 import classify_embeddings
 import sys
 import os
+import traceback
 import special
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -52,5 +53,6 @@ try:
 
 except Exception as e:
     error_subject = "Code Failed!"
-    error_body = f"The code encountered an error:\n\n{str(e)}"
+    tb_str = traceback.format_exc()  # Get the full traceback as a string
+    error_body = f"The code encountered an error:\n{str(e)}\n\n{tb_str}"
     special.send_test_email(error_subject, error_body)

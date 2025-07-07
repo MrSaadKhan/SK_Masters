@@ -1,4 +1,4 @@
-# bert_embed_line_mp.py
+# create_bert_embeddings.py
 # -*- coding: utf-8 -*-
 """
 Line-level multiprocessing BERT embeddings.

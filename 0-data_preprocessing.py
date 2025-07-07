@@ -71,7 +71,7 @@ if __name__ == "__main__":
     # List of files to exclude
     exclusion_list = ['sony_network_camera.json', 'mouse_computer_room_hub.json', 'planex_camera_one_shot!.json']
 
-    device_high = 5#10#22
+    device_high = 10#22
     device_low = 0
     num_group = 5
     stride = 1
@@ -94,8 +94,8 @@ if __name__ == "__main__":
         print(f"Device: {device} \nSeen Length: {length[0]}\nUnseen Length: {length[1]}")
 
         # print(f"{seen}")
-        seen = group_data.group_data_number(seen, 5, 1)
-        unseen = group_data.group_data_number(unseen, 5, 1)
+        # seen = group_data.group_data_number(seen, 5, 1)
+        # unseen = group_data.group_data_number(unseen, 5, 1)
         save_files(seen, unseen, device, save_path)
 ### ADD grouping logic HERE!!!!!!!!!!
     print("Complete :)")

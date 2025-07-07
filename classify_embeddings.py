@@ -292,9 +292,7 @@ def plot_accuracy_vs_vector_size(data):
     plt.tight_layout()
     plt.grid(True)
 
-    if not os.path.exists('plots'):
-        os.makedirs('plots')
-
+    
     plt.savefig('plots/classifier_accuracy.png', format='png', dpi=300, transparent=True)
     plt.savefig('plots/classifier_accuracy.svg', format='svg', dpi=300, transparent=True)
     plt.savefig('plots/classifier_accuracy.pdf', format='pdf', dpi=300, transparent=True)
@@ -375,6 +373,10 @@ def main(vector_list, device_range, vector_path, group_option, window_size, slid
     create_plots.plot_graphs_classifier(stats_list, vector_list, time_descriptions, memory_descriptions, training_length, testing_length)
 
 def main_ext(vector_list, device_low, device_high, group_option, time_group, num2word_option, window_group, window_size, slide_length):
+
+    if not os.path.exists('plots'):
+        os.makedirs('plots')
+
     device_range = f"{device_low}-{device_high}"
     vector_path = os.path.join(os.getcwd(), device_range)
     print(vector_path)
