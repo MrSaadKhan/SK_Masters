@@ -9,6 +9,7 @@ import gc
 
 import multiprocessing
 import time
+import datetime
 import psutil
 
 import matplotlib.pyplot as plt
@@ -91,6 +92,56 @@ def save_number_to_text(value, directory, filename="time.txt"):
     with open(file_path, 'w') as file:
         file.write(str(value))
 
+def format_duration(sec: float, verbose: bool = False) -> str:
+    """
+    Convert seconds → human‑readable duration like '1h 38m 4.08s'.
+
+    Parameters
+    ----------
+    sec : float
+        Total seconds (e.g. 5884.082166194916)
+    verbose : bool, default False
+        False → compact format (e.g. '1h 38m 4.08s')
+        True  → full words   (e.g. '1 hour, 38 minutes, 4.08 seconds')
+
+    Returns
+    -------
+    str
+        Formatted duration string.
+    """
+    if sec < 0:
+        raise ValueError("Duration cannot be negative")
+
+    days, remainder = divmod(int(sec), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, whole_seconds = divmod(remainder, 60)
+    fractional = sec - int(sec)
+    seconds = whole_seconds + round(fractional, 2)
+
+    parts = []
+
+    if verbose:
+        if days:
+            parts.append(f"{days} day{'s' if days != 1 else ''}")
+        if hours:
+            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if minutes:
+            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if seconds:
+            parts.append(f"{seconds:.2f} second{'s' if seconds != 1 else ''}")
+    else:
+        if days:
+            parts.append(f"{days}d")
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        if seconds or not parts:
+            parts.append(f"{seconds:.2f}s")
+
+    return " ".join(parts)
+
+
 def main(device_low, device_high, save_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size = 768):
     # Directory path to read files from
     file_path = r'/home/iotresearch/saad/data/KDDI-IoT-2019/ipfix'
@@ -102,7 +153,7 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     exclusion_list = ['sony_network_camera.json', 'mouse_computer_room_hub.json', 'planex_camera_one_shot!.json']
 
     # List of files to always include (if they exist)
-    inclusion_list = ['irobot_roomba.json', 'nature_remo.json']
+    inclusion_list = ['irobot_roomba.json', 'nature_remo.json', 'line_clova_wave.json', 'jvc_kenwood_hdtv_ip_camera.json']
 
     # Get a list of all devices in the directory
     all_devices = os.listdir(file_path)
@@ -187,6 +238,7 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     start_time = time.time()
     seen, unseen, temp = create_bert_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
     bert_time = time.time() - start_time
+    print(f"BERT total embedding time: {format_duration(bert_time)}")
     stop_event.set()  # Signal the memory monitor to stop
     process.join()
     plot_numbers_from_file(bert_path)
@@ -221,6 +273,7 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
 
     mamba_time = time.time() - start_time
     stop_event.set()
+    print(f"MAMBA total embedding time: {format_duration(mamba_time)}")
     process.join()
     plot_numbers_from_file(new_dir)
     mamba_mem_usage = highest_value_without_outliers(os.path.join(new_dir, "memory_measurements.txt"))

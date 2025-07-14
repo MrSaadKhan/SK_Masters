@@ -1,114 +1,179 @@
-
-# DIR_WITH_TXTS = Path("/home/iotresearch/saad/masters/preprocessed_data/ungrouped")  # ← change this or supply a directory on the CLI
 #!/usr/bin/env python3
 """
-find_longest_mamba_line_mp.py
-------------------------------------------------
-Find the line with the most Mamba tokens in a directory
-of .txt files, using multiprocessing for speed and a
-progress bar for visibility.
+compute_mamba_token_stats.py
+───────────────────────────────────────────────────────────────────────────────
+Compute Mamba token counts for **two** corpora, write per‑line & summary stats,
+then plot their CCDFs together (static + interactive).
 
-Run:
-    python find_longest_mamba_line_mp.py  /path/to/txts  [--workers N]
+All paths are set via variables below—no CLI args needed.
 
-Dependencies:
-    pip install transformers tqdm
+Outputs land in `OUT_DIR`:
+  • line_token_counts_<label>.txt  ── per‑line counts
+  • token_stats_<label>.txt        ── summary statistics
+  • ccdf_static.{svg,pdf,jpg}      ── 300 dpi static plot (both corpora)
+  • ccdf_interactive.html          ── interactive Plotly version (hover =>
+                                     token‑count & percentile)
+
+Dependencies
+^^^^^^^^^^^^
+    pip install transformers tqdm numpy matplotlib plotly pandas
 """
 
 from __future__ import annotations
 
-import argparse
-import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, List
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.ticker import StrMethodFormatter
 from tqdm import tqdm
 from transformers import AutoTokenizer
+import plotly.express as px
 
-MODEL_NAME = "state-spaces/mamba-130m-hf"
+# ───── CONFIGURATION ─────────────────────────────────────────────────────────
+DIRS: Dict[str, Path] = {
+    "group":  Path("/home/iotresearch/saad/masters/preprocessed_data/ungrouped"),
+    "single": Path("/home/iotresearch/saad/masters/preprocessed_data_single/ungrouped"),
+}
+OUT_DIR = Path.cwd() / "mamba_token_output"
+WORKERS = None                # None → use CPU count
+MODEL_NAME = "google-bert/bert-base-uncased"#"state-spaces/mamba-130m-hf"
 
+# ───── Worker Initialisation ──────────────────────────────────────────────────
+_TOKENIZER = None
 
-# --------------------------------------------------------------------------- #
-# Worker-side initialisation                                                  #
-# --------------------------------------------------------------------------- #
-_TOKENIZER = None  # will be initialised in each worker
-
-
-def _init_worker(model_name: str) -> None:  # runs *inside* each worker
+def _init_worker(model_name: str):
     global _TOKENIZER
     _TOKENIZER = AutoTokenizer.from_pretrained(model_name)
+    print(f"[Worker] Loaded tokenizer class: {_TOKENIZER.__class__.__name__}")
 
+# ───── Per‑file processing ───────────────────────────────────────────────────
 
-# --------------------------------------------------------------------------- #
-# Worker-side task                                                            #
-# --------------------------------------------------------------------------- #
-def _process_file(path: Path) -> Tuple[int, str, int, str]:
-    """
-    Read `path`, find the line with the most tokens (Mamba tokenizer).
-
-    Returns:
-        (max_tokens, str(path), line_number, line_text)
-    """
+def _process_file(path: Path):
+    """Return a list of (filepath, line_no, token_count) for *every* line."""
     global _TOKENIZER
-    max_tokens, max_lineno, max_line = -1, None, None
-
+    res = []
     with path.open("r", encoding="utf-8", errors="ignore") as f:
-        for lineno, line in enumerate(f, start=1):
-            stripped = line.rstrip("\n")
-            n_tok = len(_TOKENIZER.encode(stripped, add_special_tokens=False))
-            if n_tok > max_tokens:
-                max_tokens, max_lineno, max_line = n_tok, lineno, stripped
+        for lineno, line in enumerate(f, 1):
+            text = line.rstrip("\n")
+            n_tok = len(_TOKENIZER.encode(text, add_special_tokens=False))
+            res.append((str(path), lineno, n_tok))
+    return res
 
-    return max_tokens, str(path), max_lineno, max_line
+# ───── Corpus‑level processing ───────────────────────────────────────────────
 
+def collect_counts(label: str, root: Path) -> List[int]:
+    if not root.is_dir():
+        sys.exit(f"Directory not found: {root}")
 
-# --------------------------------------------------------------------------- #
-# Main                                                                         #
-# --------------------------------------------------------------------------- #
-def main(directory: Path, workers: int | None = None) -> None:
-    txt_files = list(directory.rglob("*.txt"))
+    txt_files = list(root.rglob("*.txt"))
     if not txt_files:
-        sys.exit(f"No .txt files found in {directory.resolve()}")
+        sys.exit(f"No .txt files found in {root}")
 
-    print(f"Scanning {len(txt_files)} files with up to "
-          f"{workers or os.cpu_count()} worker processes …")
+    line_out = OUT_DIR / f"line_token_counts_{label}.txt"
+    stats_out = OUT_DIR / f"token_stats_{label}.txt"
 
-    global_max = (-1, "", -1, "")  # (tokens, file, line_no, line_text)
+    counts: List[int] = []
+    OUT_DIR.mkdir(exist_ok=True)
 
-    with ProcessPoolExecutor(max_workers=workers,
+    with ProcessPoolExecutor(max_workers=WORKERS,
                              initializer=_init_worker,
                              initargs=(MODEL_NAME,)) as pool, \
-         tqdm(total=len(txt_files), desc="Files", unit="file") as pbar:
+         tqdm(total=len(txt_files), desc=f"{label} files", unit="file") as pbar, \
+         open(line_out, "w", encoding="utf-8") as fout:
 
+        fout.write("file_path\tline_number\ttoken_count\n")
         futures = {pool.submit(_process_file, p): p for p in txt_files}
-
         for fut in as_completed(futures):
             pbar.update()
-            tokens, path, lineno, text = fut.result()
-            if tokens > global_max[0]:
-                global_max = (tokens, path, lineno, text)
+            for fp, ln, tok in fut.result():
+                fout.write(f"{fp}\t{ln}\t{tok}\n")
+                counts.append(tok)
 
-    # ---------------- Result ---------------- #
-    tokens, path, lineno, text = global_max
-    print("\n=== Longest line by Mamba token count ===")
-    print(f"File        : {path}")
-    print(f"Line number : {lineno}")
-    print(f"Token count : {tokens}")
-    print("Line preview:")
-    print(text[:200] + ("…" if len(text) > 200 else ""))
+    # ─── Stats ────────────────────────────────────────────────────────────
+    arr = np.asarray(counts)
+    total = len(arr)
+    pct_512 = 100 * np.sum(arr <= 512) / total
+    p99 = np.percentile(arr, 99)
 
+    with open(stats_out, "w") as sf:
+        sf.write(f"Corpus label           : {label}\n")
+        sf.write(f"Total lines            : {total}\n")
+        sf.write(f"Lines ≤512 tokens      : {np.sum(arr <= 512)} ({pct_512:.2f}th pct)\n")
+        sf.write(f"99th‑percentile tokens : {p99:.2f}\n")
 
+    return counts
+
+# ───── Plotting ───────────────────────────────────────────────────────────────
+
+def plot_ccdf(counts_map: Dict[str, List[int]]):
+    # STATIC ──────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots()
+    for label, counts in counts_map.items():
+        s = np.sort(counts)
+        ccdf = 1 - np.arange(1, len(s) + 1) / len(s)
+        ax.loglog(s, ccdf, label=label)
+
+    ax.set_xlabel("Token count")
+    ax.set_ylabel("CCDF")
+    ax.set_title("CCDF of Mamba token counts per line")
+    ax.legend()
+
+    # integer‑style tick labels instead of 1eX
+    ax.get_xaxis().set_major_formatter(StrMethodFormatter("{x:.0f}"))
+    ax.get_yaxis().set_major_formatter(StrMethodFormatter("{x:.2f}"))
+
+    for ext in ["svg", "pdf", "jpg"]:
+        fig.savefig(OUT_DIR / f"ccdf_static.{ext}", dpi=300)
+    plt.close(fig)
+
+    # INTERACTIVE ─────────────────────────────────────────────────────────
+    dfs = []
+    for label, counts in counts_map.items():
+        s = np.sort(counts)
+        ccdf = 1 - np.arange(1, len(s) + 1) / len(s)
+        percentiles = np.arange(1, len(s) + 1) / len(s) * 100
+        dfs.append(pd.DataFrame({
+            "token_count": s,
+            "ccdf": ccdf,
+            "percentile": percentiles,
+            "dataset": label,
+        }))
+
+    df = pd.concat(dfs, ignore_index=True)
+    fig_int = px.line(
+        df,
+        x="token_count",
+        y="ccdf",
+        color="dataset",
+        hover_data={"percentile": ':.2f'},
+        labels={"ccdf": "CCDF", "token_count": "Token count", "percentile": "Percentile (%)"},
+        title="CCDF of Mamba token counts per line",
+    )
+    fig_int.update_xaxes(type="log")
+    fig_int.update_yaxes(type="log")
+
+    # custom hover: show token count (x) + percentile
+    fig_int.update_traces(hovertemplate=
+        "Dataset: %{legendgroup}<br>Token count: %{x}<br>Percentile: %{customdata[0]:.2f}%<extra></extra>")
+
+    fig_int.write_html(OUT_DIR / "ccdf_interactive.html")
+
+# ───── Main ──────────────────────────────────────────────────────────────────
+
+def main():
+    counts_map: Dict[str, List[int]] = {}
+    for label, path in DIRS.items():
+        counts_map[label] = collect_counts(label, path)
+
+    plot_ccdf(counts_map)
+
+    print(f"All outputs written to: {OUT_DIR.resolve()}")
+
+# ───── Run ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Find longest-token line (Mamba) with multiprocessing.")
-    parser.add_argument("directory", nargs="?", default="/home/iotresearch/saad/masters/preprocessed_data/ungrouped", help="Directory containing .txt files")
-    parser.add_argument("--workers", type=int, help="Number of worker processes (default: CPU count)")
-    args = parser.parse_args()
-
-    target_dir = Path(args.directory).expanduser()
-    if not target_dir.is_dir():
-        sys.exit(f"Directory not found: {target_dir}")
-
-    # Required for Windows & macOS spawn-method safety
-    main(target_dir, args.workers)
+    main()
