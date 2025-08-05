@@ -18,11 +18,24 @@ def save_individual_file(list_of_dicts, name, path):
             formatted_line = ' '.join(f"{key}: {value}" for key, value in data_dict.items())
             file.write(f"{formatted_line}\n")
 
+def save_individual_file_skip(list_of_dicts, name, path):
+    path = os.path.join(path, f'{name}.txt')
+    if os.path.exists(path):
+        print(f"File {path} already exists. Skipping.")
+        return
+    with open(path, 'w') as file:
+        for data_dict in list_of_dicts:
+            formatted_line = ' '.join(f"{key}: {value}" for key, value in data_dict.items())
+            file.write(f"{formatted_line}\n")
 
    
 def save_files(seen, unseen, name, path):
     save_individual_file(seen, name + '_seen', path)
     save_individual_file(unseen, name + '_unseen', path)
+
+def save_files_skip(seen, unseen, name, path):
+    save_individual_file_skip(seen, name + '_seen', path)
+    save_individual_file_skip(unseen, name + '_unseen', path)
 
 def get_data(save_path, device):
     seen = read_file_as_list_of_lists(os.path.join(save_path, device + "_seen.txt"))
@@ -71,7 +84,7 @@ if __name__ == "__main__":
     # List of files to exclude
     exclusion_list = ['sony_network_camera.json', 'mouse_computer_room_hub.json', 'planex_camera_one_shot!.json']
 
-    device_high = 10#22
+    device_high = 22
     device_low = 0
     num_group = 5
     stride = 1
@@ -94,8 +107,8 @@ if __name__ == "__main__":
         print(f"Device: {device} \nSeen Length: {length[0]}\nUnseen Length: {length[1]}")
 
         # print(f"{seen}")
-        seen = group_data.group_data_number(seen, 5, 1)
-        unseen = group_data.group_data_number(unseen, 5, 1)
-        save_files(seen, unseen, device, save_path)
+        # seen = group_data.group_data_number(seen, 5, 1)
+        # unseen = group_data.group_data_number(unseen, 5, 1)
+        save_files_skip(seen, unseen, device, save_path)
 ### ADD grouping logic HERE!!!!!!!!!!
     print("Complete :)")

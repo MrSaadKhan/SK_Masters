@@ -29,6 +29,10 @@ window_group = 1
 window_size = 10
 slide_length = 1
 
+use_percentage_split = False
+train_size = 7
+
+
 subject = "Code Done!"
 body = "The code has been executed successfully."
 
@@ -36,17 +40,24 @@ try:
     for device_high_option in device_high:
 
         # Redirect output to file for main_create_all_embeddings
-        redirect_output_to_file(f"Output1-{device_low}-{device_high_option}.txt")
-        main_create_all_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length)
-        reset_output()  # Reset output back to the console
+        # redirect_output_to_file(f"Output1-{device_low}-{device_high_option}.txt")
+        # main_create_all_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length)
+        # reset_output()  # Reset output back to the console
+
+        # Unifies old file splitting to new format
+        
 
 
-        # Redirect output to file for classify_embeddings
+        # # Redirect output to file for classify_embeddings
         redirect_output_to_file(f"output3-{device_low}{device_high_option}.txt")
-        classify_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length)
+        for i in range(1, 31):
+            train_size = i
+            classify_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length, use_percentage_split, train_size)
+            os.rename(os.path.join(os.getcwd(), "plots"), os.path.join(os.getcwd(), f"plots_{device_high_option}_{use_percentage_split}_{train_size}"))
+
         reset_output()  # Reset output back to the console
 
-        os.rename(os.path.join(os.getcwd(), "plots"), os.path.join(os.getcwd(), f"plots_{device_high_option}"))
+        # os.rename(os.path.join(os.getcwd(), "plots"), os.path.join(os.getcwd(), f"plots_{device_high_option}"))
 
     print("All scripts executed successfully and outputs saved to files.")
     special.send_test_email(subject, body)

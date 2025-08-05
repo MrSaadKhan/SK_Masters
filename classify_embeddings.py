@@ -11,6 +11,9 @@ import gc
 import create_plots
 import joblib
 # import tensorflow as tf  # Added for neural network functionality
+import re  # For robust timestamp extraction
+from datetime import datetime, timedelta
+import io
 
 # Mapping device names to their indices
 def map_device_name(file_paths):
@@ -66,15 +69,20 @@ def plot_device_names(input_list):
     
     return output_list
 
-def classify_embeddings_random_forest(folder_path, output_name, vector_size):
-    
+def classify_embeddings_random_forest(folder_path, output_name, vector_size, use_percentage_split=False, train_size=7):
     def load_embeddings(file_path):
         embeddings = []
         with open(file_path, 'r', encoding='utf-8') as file:
-            for line in tqdm(file, desc=f'Loading embeddings from {os.path.basename(file_path)}', unit=' vectors'):
-                vector = np.array([float(x) for x in line.strip().split()])
+            for line_number, line in enumerate(file, start=1):
+                try:
+                    vector = np.array([float(x) for x in line.strip().split()])
+                except ValueError as e:
+                    print(f"Error converting to float in file {file_path} at line {line_number}: {e}")
+                    print(f"Line content: {repr(line)}")
+                    raise
                 embeddings.append(vector)
         return embeddings
+
 
     # List of file paths in the folder
     file_paths = [os.path.join(folder_path, fname) for fname in os.listdir(folder_path) if fname.endswith('.txt')]
@@ -82,33 +90,75 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
     # Map device names to indices
     device_to_index = map_device_name(file_paths)
 
-    # Load embeddings and labels
-    all_embeddings = []
-    all_labels = []
-    for file_path in sorted(file_paths):  # Sorted to ensure seen and unseen pairs are together
-        # Extract device name from the file name before ".json"
-        device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
-        device_name = ' '.join(word.capitalize() for word in device_name.split())
-        
-        if device_name not in device_to_index:
-            print(f"Device name '{device_name}' not found in device_to_index dictionary.")
-            continue
-        
-        device_index = device_to_index[device_name]
-        device_embeddings = load_embeddings(file_path)
-        labels = [device_index] * len(device_embeddings)
-        all_embeddings.extend(device_embeddings)
-        all_labels.extend(labels)
+    print(f"Training RF Classifier using the options: use_percentage_split: {use_percentage_split}, train_size: {train_size}")
 
-    # Convert to numpy arrays
-    all_embeddings = np.array(all_embeddings)
-    all_labels = np.array(all_labels)
+    if use_percentage_split:
+        # --- ORIGINAL LOGIC ---
+        all_embeddings = []
+        all_labels = []
+        for file_path in sorted(file_paths):
+            # Extract device name from the file name before ".json"
+            device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
+            device_name = ' '.join(word.capitalize() for word in device_name.split())
+            device_index = device_to_index[device_name]
+            device_embeddings = load_embeddings(file_path)
+            labels = [device_index] * len(device_embeddings)
+            all_embeddings.extend(device_embeddings)
+            all_labels.extend(labels)
 
-    # Split into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(all_embeddings, all_labels, test_size=0.3, stratify=all_labels, random_state=42)
-    
-    training_length = len(X_train)
-    testing_length  = len(X_test)
+        # Split into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            np.array(all_embeddings), np.array(all_labels),
+            test_size=1-train_size, stratify=all_labels, random_state=42
+        )
+        training_length = len(X_train)
+        testing_length = len(X_test)
+        print(f"Percentage split: Training = {training_length}, Testing = {testing_length}")
+    else:
+        # --- NEW LOGIC ---
+        train_embeddings, test_embeddings = [], []
+        train_labels, test_labels = [], []
+        for file_path in sorted(file_paths):
+            # Extract device index
+            device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
+            device_name = ' '.join(word.capitalize() for word in device_name.split())
+            device_index = device_to_index[device_name]
+
+            # Load embeddings for this device
+            device_embeddings = load_embeddings(file_path)
+
+            # Determine proportion of first 7 days from the corresponding "seen" file
+            root = os.path.basename(file_path).split('.json')[0]
+            seen_file = os.path.join(os.getcwd(), 'preprocessed_data', 'ungrouped', f'{root}.json_seen.txt')
+            dates = []
+            with open(seen_file, 'r', encoding='utf-8') as sf:
+                for line in sf:
+                    m = re.search(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)", line)
+                    if m:
+                        dates.append(datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S.%f'))
+            if not dates:
+                raise ValueError(f"No valid timestamps found in {seen_file}")
+            start_dt = dates[0]
+            end_dt = start_dt + timedelta(days=train_size)
+            count = sum(1 for d in dates if d <= end_dt)
+            p = count / len(dates)
+
+            # Split embeddings chronologically by computed proportion
+            split_idx = int(len(device_embeddings) * p)
+            train_embeddings.extend(device_embeddings[:split_idx])
+            test_embeddings.extend(device_embeddings[split_idx:])
+            train_labels.extend([device_index] * split_idx)
+            test_labels.extend([device_index] * (len(device_embeddings) - split_idx))
+            print(f"Device {device_name}: training_length = {split_idx}, testing_length = {len(device_embeddings) - split_idx}")
+
+        # Convert to numpy arrays for training/testing
+        X_train = np.array(train_embeddings)
+        X_test = np.array(test_embeddings)
+        y_train = np.array(train_labels)
+        y_test = np.array(test_labels)
+        training_length = len(X_train)
+        testing_length = len(X_test)
+        print(f"Custom split: Training = {training_length}, Testing = {testing_length}")
 
     # Initialize and train the Random Forest classifier
     clf = RandomForestClassifier(n_jobs=-1, n_estimators=500, random_state=42)
@@ -124,61 +174,57 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size):
     print(f"Evaluation of RF classifier at a vector size of {vector_size}")
     conf_matrix = confusion_matrix(y_test, y_pred)
     print(f"Confusion Matrix for {vector_size}:\n{conf_matrix}")
-    f1 = f1_score(y_test, y_pred, average='macro')
-    print(f"RF Macro F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
-    f1 = f1_score(y_test, y_pred, average='weighted')
-    print(f"RF Weighted F1 Score for {vector_size}: {f1} \n (Folder: {folder_path})")
-    
+    f1_macro = f1_score(y_test, y_pred, average='macro')
+    f1_weighted = f1_score(y_test, y_pred, average='weighted')
+    print(f"RF Macro F1 Score: {f1_macro}\nRF Weighted F1 Score: {f1_weighted}")
+
     device_names = sorted(device_to_index, key=device_to_index.get)
     device_names = plot_device_names(device_names)
 
-
     print(classification_report(y_test, y_pred, target_names=device_names))
 
-
-    # --- NEW: per-class correct/incorrect counts ---
+    # --- per-class correct/incorrect counts ---
     for idx, name in enumerate(device_names):
         total = conf_matrix[idx].sum()
         correct = conf_matrix[idx, idx]
         incorrect = total - correct
         print(f"  Class '{name}': Total = {total},  Correct = {correct},  Incorrect = {incorrect}")
 
-    conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]  # Convert to percentage
+        # --- confusion matrix plotting ---
+    conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]
     accuracy = np.mean(np.diag(conf_matrix_percent))
-
-
-    # Dynamically compute font size based on the confusion matrix dimensions
+    # Dynamic font sizing
     matrix_size = conf_matrix_percent.shape[0]
-    font_size = 100 / matrix_size  # Tweak scaling factor as needed
+    font_size = 100 / matrix_size
     print(f"Font size = {font_size}")
-    
     disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix_percent, display_labels=device_names)
     fig, ax = plt.subplots(figsize=(8, 6))
     if len(X_test) > 10:
         fig, ax = plt.subplots(figsize=(16, 12))
     disp.plot(cmap=plt.cm.Blues, ax=ax, values_format=".2f", text_kw={'fontsize': font_size})
-    
-    # Set axis labels and tick parameters using the dynamic font size
     ax.set_xlabel('Predicted Label', fontsize=font_size)
     ax.set_ylabel('True Label', fontsize=font_size)
     ax.tick_params(axis='both', which='major', labelsize=font_size)
     ax.set_xticklabels(device_names, rotation=90, fontsize=font_size)
     ax.set_yticklabels(device_names, fontsize=font_size)
-    
     plt.tight_layout()
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.png', dpi=300, transparent=True)
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.svg', dpi=300, transparent=True)
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.pdf', dpi=300, transparent=True)
-
-    folder_path_rf = './rfmodels/'
-    os.makedirs(folder_path_rf, exist_ok=True)
-    model_file = os.path.join(folder_path_rf, f'{output_name}_random_forest_model.pkl')
-    joblib.dump(clf, model_file)
-
-    file_size_bytes = os.path.getsize(model_file)
+    
+    # Save model and return
+    # model_file = os.path.join('./rfmodels/', f'{output_name}_random_forest_model.pkl')
+    # os.makedirs(os.path.dirname(model_file), exist_ok=True)
+    buffer = io.BytesIO()
+    joblib.dump(clf, buffer)
+    file_size_bytes = buffer.tell()
     file_size = file_size_bytes / (1024 * 1024)
 
-    return accuracy, file_size, training_length, testing_length
+    return f1_macro, file_size, training_length, testing_length
+
+
+
+
 
 # def classify_embeddings_nn(folder_path, output_name, vector_size):
 #     def load_embeddings(file_path):
@@ -297,7 +343,7 @@ def plot_accuracy_vs_vector_size(data):
     plt.savefig('plots/classifier_accuracy.svg', format='svg', dpi=300, transparent=True)
     plt.savefig('plots/classifier_accuracy.pdf', format='pdf', dpi=300, transparent=True)
 
-def main(vector_list, device_range, vector_path, group_option, window_size, slide_length):
+def main(vector_list, device_range, vector_path, group_option, window_size, slide_length, use_percentage_split=False, train_size=7):
     file_path = vector_path
     stats_list = []
 
@@ -341,7 +387,7 @@ def main(vector_list, device_range, vector_path, group_option, window_size, slid
 
             if os.path.exists(folder_path):
                 # Random Forest Classification
-                rf_accuracy, memory, training_length, testing_length = classify_embeddings_random_forest(folder_path, embed_name, vector_size)
+                rf_accuracy, memory, training_length, testing_length = classify_embeddings_random_forest(folder_path, embed_name, vector_size, use_percentage_split, train_size)
                 accuracy_list.append((vector_size, option + '_rf', rf_accuracy))
                 print(f"RF Accuracy for {embed_name}: {rf_accuracy}")
 
@@ -372,7 +418,7 @@ def main(vector_list, device_range, vector_path, group_option, window_size, slid
     plot_accuracy_vs_vector_size(accuracy_list)
     create_plots.plot_graphs_classifier(stats_list, vector_list, time_descriptions, memory_descriptions, training_length, testing_length)
 
-def main_ext(vector_list, device_low, device_high, group_option, time_group, num2word_option, window_group, window_size, slide_length):
+def main_ext(vector_list, device_low, device_high, group_option, time_group, num2word_option, window_group, window_size, slide_length, use_percentage_split=False, train_size=7):
 
     if not os.path.exists('plots'):
         os.makedirs('plots')
@@ -381,5 +427,5 @@ def main_ext(vector_list, device_low, device_high, group_option, time_group, num
     vector_path = os.path.join(os.getcwd(), device_range)
     print(vector_path)
     print(vector_list)
-    main(vector_list, device_range, vector_path, group_option, window_size, slide_length)
+    main(vector_list, device_range, vector_path, group_option, window_size, slide_length, use_percentage_split, train_size)
     print("Complete :)")

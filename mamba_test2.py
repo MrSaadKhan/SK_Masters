@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-compute_mamba_token_stats.py
+compute_token_stats_dual.py
 ───────────────────────────────────────────────────────────────────────────────
-Compute Mamba token counts for **two** corpora, write per‑line & summary stats,
-then plot their CCDFs together (static + interactive).
+Compute token counts for **two** models (e.g., Mamba and BERT) across **two** corpora,
+write per‑line & summary stats, then plot their CCDFs together (static + interactive).
+
+If `line_token_counts_<label>.txt` exists, the script reloads counts from it; otherwise it
+recomputes tokens. Stats (average, percentiles) are recalculated and `token_stats_<label>.txt`
+is always overwritten.
 
 All paths are set via variables below—no CLI args needed.
 
-Outputs land in `OUT_DIR`:
+Outputs land in `BASE_OUT_DIR/<model_slug>/`:
   • line_token_counts_<label>.txt  ── per‑line counts
-  • token_stats_<label>.txt        ── summary statistics
+  • token_stats_<label>.txt        ── summary statistics (includes avg, model name)
   • ccdf_static.{svg,pdf,jpg}      ── 300 dpi static plot (both corpora)
-  • ccdf_interactive.html          ── interactive Plotly version (hover =>
-                                     token‑count & percentile)
+  • ccdf_interactive.html          ── interactive Plotly version
 
 Dependencies
 ^^^^^^^^^^^^
@@ -20,7 +23,6 @@ Dependencies
 """
 
 from __future__ import annotations
-
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -36,104 +38,109 @@ import plotly.express as px
 
 # ───── CONFIGURATION ─────────────────────────────────────────────────────────
 DIRS: Dict[str, Path] = {
-    "group":  Path("/home/iotresearch/saad/masters/preprocessed_data/ungrouped"),
-    "single": Path("/home/iotresearch/saad/masters/preprocessed_data_single/ungrouped"),
+    "group":  Path("/home/iotresearch/saad/masters/preprocessed_data_group/ungrouped"),
+    "single": Path("/home/iotresearch/saad/masters/preprocessed_data/ungrouped"),
 }
-OUT_DIR = Path.cwd() / "mamba_token_output"
 WORKERS = None                # None → use CPU count
-MODEL_NAME = "google-bert/bert-base-uncased"#"state-spaces/mamba-130m-hf"
+MODELS = [
+    "state-spaces/mamba-130m-hf",
+    "google-bert/bert-base-uncased",
+]
+BASE_OUT_DIR = Path.cwd() / "token_output"
 
-# ───── Worker Initialisation ──────────────────────────────────────────────────
+# ───── Worker Init ───────────────────────────────────────────────────────────
 _TOKENIZER = None
 
 def _init_worker(model_name: str):
     global _TOKENIZER
     _TOKENIZER = AutoTokenizer.from_pretrained(model_name)
-    print(f"[Worker] Loaded tokenizer class: {_TOKENIZER.__class__.__name__}")
+    print(f"[Worker] Loaded tokenizer for model {model_name}")
 
-# ───── Per‑file processing ───────────────────────────────────────────────────
+# ───── File Processing ────────────────────────────────────────────────────────
 
-def _process_file(path: Path):
-    """Return a list of (filepath, line_no, token_count) for *every* line."""
+def _process_file(path: Path) -> List[int]:
+    """Return a list of token counts for every line in the file."""
     global _TOKENIZER
-    res = []
+    counts: List[int] = []
     with path.open("r", encoding="utf-8", errors="ignore") as f:
-        for lineno, line in enumerate(f, 1):
+        for line in f:
             text = line.rstrip("\n")
             n_tok = len(_TOKENIZER.encode(text, add_special_tokens=False))
-            res.append((str(path), lineno, n_tok))
-    return res
-
-# ───── Corpus‑level processing ───────────────────────────────────────────────
-
-def collect_counts(label: str, root: Path) -> List[int]:
-    if not root.is_dir():
-        sys.exit(f"Directory not found: {root}")
-
-    txt_files = list(root.rglob("*.txt"))
-    if not txt_files:
-        sys.exit(f"No .txt files found in {root}")
-
-    line_out = OUT_DIR / f"line_token_counts_{label}.txt"
-    stats_out = OUT_DIR / f"token_stats_{label}.txt"
-
-    counts: List[int] = []
-    OUT_DIR.mkdir(exist_ok=True)
-
-    with ProcessPoolExecutor(max_workers=WORKERS,
-                             initializer=_init_worker,
-                             initargs=(MODEL_NAME,)) as pool, \
-         tqdm(total=len(txt_files), desc=f"{label} files", unit="file") as pbar, \
-         open(line_out, "w", encoding="utf-8") as fout:
-
-        fout.write("file_path\tline_number\ttoken_count\n")
-        futures = {pool.submit(_process_file, p): p for p in txt_files}
-        for fut in as_completed(futures):
-            pbar.update()
-            for fp, ln, tok in fut.result():
-                fout.write(f"{fp}\t{ln}\t{tok}\n")
-                counts.append(tok)
-
-    # ─── Stats ────────────────────────────────────────────────────────────
-    arr = np.asarray(counts)
-    total = len(arr)
-    pct_512 = 100 * np.sum(arr <= 512) / total
-    p99 = np.percentile(arr, 99)
-
-    with open(stats_out, "w") as sf:
-        sf.write(f"Corpus label           : {label}\n")
-        sf.write(f"Total lines            : {total}\n")
-        sf.write(f"Lines ≤512 tokens      : {np.sum(arr <= 512)} ({pct_512:.2f}th pct)\n")
-        sf.write(f"99th‑percentile tokens : {p99:.2f}\n")
-
+            counts.append(n_tok)
     return counts
 
-# ───── Plotting ───────────────────────────────────────────────────────────────
+# ───── Corpus & Model Processing ──────────────────────────────────────────────
 
-def plot_ccdf(counts_map: Dict[str, List[int]]):
-    # STATIC ──────────────────────────────────────────────────────────────
+def collect_counts(label: str, root: Path, model_name: str, out_dir: Path) -> List[int]:
+    if not root.is_dir(): sys.exit(f"Directory not found: {root}")
+    txt_files = list(root.rglob("*.txt"))
+    if not txt_files: sys.exit(f"No .txt files found in {root}")
+
+    model_slug = model_name.split('/')[-1]
+    model_out = out_dir / model_slug
+    model_out.mkdir(parents=True, exist_ok=True)
+    line_out = model_out / f"line_token_counts_{label}.txt"
+    stats_out = model_out / f"token_stats_{label}.txt"
+
+    # LOAD or COMPUTE counts
+    if line_out.exists():
+        print(f"Loading existing token counts for {model_slug}:{label}")
+        df = pd.read_csv(line_out, sep='\t')
+        counts = df['token_count'].tolist()
+    else:
+        counts = []
+        with ProcessPoolExecutor(max_workers=WORKERS,
+                                 initializer=_init_worker,
+                                 initargs=(model_name,)) as pool, \
+             tqdm(total=len(txt_files), desc=f"{model_slug}:{label}", unit="file") as pbar, \
+             open(line_out, "w", encoding="utf-8") as fout:
+            fout.write("file_path\tline_number\ttoken_count\n")
+            futures = {pool.submit(_process_file, p): p for p in txt_files}
+            for fut in as_completed(futures):
+                pbar.update()
+                fp = futures[fut]
+                for tok in fut.result():
+                    fout.write(f"{fp}\t-\t{tok}\n")
+                    counts.append(tok)
+
+    # Always recompute stats
+    arr = np.array(counts)
+    total = len(arr)
+    avg = float(np.mean(arr))
+    pct_512 = 100 * np.sum(arr <= 512) / total
+    p99 = np.percentile(arr, 99)
+    with open(stats_out, "w") as sf:
+        sf.write(f"Model                  : {model_name}\n")
+        sf.write(f"Corpus label           : {label}\n")
+        sf.write(f"Total lines            : {total}\n")
+        sf.write(f"Average tokens/line    : {avg:.2f}\n")
+        sf.write(f"Lines ≤512 tokens      : {np.sum(arr <= 512)} ({pct_512:.2f}th pct)\n")
+        sf.write(f"99th‑percentile tokens : {p99:.2f}\n")
+    return counts
+
+# ───── Plotting ─────────────────────────────────────────────────────────────
+
+def plot_ccdf(counts_map: Dict[str, List[int]], out_dir: Path):
     fig, ax = plt.subplots()
-    for label, counts in counts_map.items():
+    for key, counts in counts_map.items():
         s = np.sort(counts)
         ccdf = 1 - np.arange(1, len(s) + 1) / len(s)
-        ax.loglog(s, ccdf, label=label)
+        ax.plot(s, ccdf, label=key)
 
     ax.set_xlabel("Token count")
     ax.set_ylabel("CCDF")
-    ax.set_title("CCDF of Mamba token counts per line")
+    ax.set_title("CCDF of token counts per line")
     ax.legend()
-
-    # integer‑style tick labels instead of 1eX
     ax.get_xaxis().set_major_formatter(StrMethodFormatter("{x:.0f}"))
     ax.get_yaxis().set_major_formatter(StrMethodFormatter("{x:.2f}"))
 
     for ext in ["svg", "pdf", "jpg"]:
-        fig.savefig(OUT_DIR / f"ccdf_static.{ext}", dpi=300)
+        fig.savefig(out_dir / f"ccdf_static.{ext}" , dpi=300)
     plt.close(fig)
 
-    # INTERACTIVE ─────────────────────────────────────────────────────────
+    # Interactive
     dfs = []
-    for label, counts in counts_map.items():
+    for key, counts in counts_map.items():
         s = np.sort(counts)
         ccdf = 1 - np.arange(1, len(s) + 1) / len(s)
         percentiles = np.arange(1, len(s) + 1) / len(s) * 100
@@ -141,39 +148,39 @@ def plot_ccdf(counts_map: Dict[str, List[int]]):
             "token_count": s,
             "ccdf": ccdf,
             "percentile": percentiles,
-            "dataset": label,
+            "model": key.split(':')[0],
+            "corpus": key.split(':')[1],
         }))
-
     df = pd.concat(dfs, ignore_index=True)
     fig_int = px.line(
         df,
         x="token_count",
         y="ccdf",
-        color="dataset",
+        color="model",
+        line_dash="corpus",
         hover_data={"percentile": ':.2f'},
         labels={"ccdf": "CCDF", "token_count": "Token count", "percentile": "Percentile (%)"},
-        title="CCDF of Mamba token counts per line",
+        title="CCDF of token counts per line"
     )
     fig_int.update_xaxes(type="log")
     fig_int.update_yaxes(type="log")
-
-    # custom hover: show token count (x) + percentile
     fig_int.update_traces(hovertemplate=
-        "Dataset: %{legendgroup}<br>Token count: %{x}<br>Percentile: %{customdata[0]:.2f}%<extra></extra>")
+        "Model: %{legendgroup}<br>Corpus: %{customdata[1]}<br>Token count: %{x}<br>Percentile: %{customdata[0]:.2f}%<extra></extra>")
 
-    fig_int.write_html(OUT_DIR / "ccdf_interactive.html")
+    fig_int.write_html(out_dir / "ccdf_interactive.html")
 
-# ───── Main ──────────────────────────────────────────────────────────────────
+# ───── Main ───────────────────────────────────────────────────────────────── ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def main():
-    counts_map: Dict[str, List[int]] = {}
-    for label, path in DIRS.items():
-        counts_map[label] = collect_counts(label, path)
+    BASE_OUT_DIR.mkdir(exist_ok=True)
+    for model in MODELS:
+        overall_counts: Dict[str, List[int]] = {}
+        for label, path in DIRS.items():
+            key = f"{model.split('/')[-1]}:{label}"
+            counts = collect_counts(label, path, model, BASE_OUT_DIR)
+            overall_counts[key] = counts
+        plot_ccdf(overall_counts, BASE_OUT_DIR / model.split('/')[-1])
+    print(f"All outputs written under: {BASE_OUT_DIR.resolve()}")
 
-    plot_ccdf(counts_map)
-
-    print(f"All outputs written to: {OUT_DIR.resolve()}")
-
-# ───── Run ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
