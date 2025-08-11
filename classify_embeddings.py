@@ -6,11 +6,9 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from tqdm import tqdm  # Import tqdm for progress bars
 import time
-# from memory_profiler import memory_usage
 import gc
 import create_plots
 import joblib
-# import tensorflow as tf  # Added for neural network functionality
 import re  # For robust timestamp extraction
 from datetime import datetime, timedelta
 import io
@@ -83,89 +81,156 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size, use
                 embeddings.append(vector)
         return embeddings
 
-
-    # List of file paths in the folder
     file_paths = [os.path.join(folder_path, fname) for fname in os.listdir(folder_path) if fname.endswith('.txt')]
-
-    # Map device names to indices
     device_to_index = map_device_name(file_paths)
 
     print(f"Training RF Classifier using the options: use_percentage_split: {use_percentage_split}, train_size: {train_size}")
 
-    if use_percentage_split:
-        # --- ORIGINAL LOGIC ---
-        all_embeddings = []
-        all_labels = []
-        for file_path in sorted(file_paths):
-            # Extract device name from the file name before ".json"
-            device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
-            device_name = ' '.join(word.capitalize() for word in device_name.split())
-            device_index = device_to_index[device_name]
-            device_embeddings = load_embeddings(file_path)
-            labels = [device_index] * len(device_embeddings)
-            all_embeddings.extend(device_embeddings)
-            all_labels.extend(labels)
+    # if use_percentage_split:
+    #     # Original percentage split logic
+    #     all_embeddings = []
+    #     all_labels = []
+    #     for file_path in sorted(file_paths):
+    #         device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
+    #         device_name = ' '.join(word.capitalize() for word in device_name.split())
+    #         device_index = device_to_index[device_name]
+    #         device_embeddings = load_embeddings(file_path)
+    #         labels = [device_index] * len(device_embeddings)
+    #         all_embeddings.extend(device_embeddings)
+    #         all_labels.extend(labels)
 
-        # Split into training and testing sets
-        X_train, X_test, y_train, y_test = train_test_split(
-            np.array(all_embeddings), np.array(all_labels),
-            test_size=1-train_size, stratify=all_labels, random_state=42
-        )
-        training_length = len(X_train)
-        testing_length = len(X_test)
-        print(f"Percentage split: Training = {training_length}, Testing = {testing_length}")
-    else:
-        # --- NEW LOGIC ---
+    #     # X_train, X_test, y_train, y_test = train_test_split(
+    #     #     np.array(all_embeddings), np.array(all_labels),
+    #     #     test_size=1-(train_size/100), stratify=all_labels, random_state=42
+    #     # )
+
+    #     X_train, X_test, y_train, y_test = train_test_split(
+    #         np.array(all_embeddings), np.array(all_labels),
+    #         test_size=1-(train_size/100), stratify=None, shuffle=False
+    #     )
+
+    #     from collections import Counter
+
+    #     train_counts = Counter(y_train)
+    #     test_counts = Counter(y_test)
+
+    #     print("\n[Split Stats] Per-device training/testing sample counts:")
+    #     for device_name, device_index in device_to_index.items():
+    #         total = all_labels.count(device_index)
+    #         train = train_counts[device_index]
+    #         test = test_counts[device_index]
+    #         print(f"{device_name}: Total = {total}, Training = {train} [{100*(train/(train+test)):.2f}%], Testing = {test}")
+
+
+    #     training_length = len(X_train)
+    #     testing_length = len(X_test)
+    #     print(f"Percentage split: Training = {training_length} [{100*(training_length/(training_length+testing_length)):.2f}%], Testing = {testing_length}")
+
+    if use_percentage_split:
+        # Per-class percentage split: take the first train_size% of samples from each device file (no shuffle)
         train_embeddings, test_embeddings = [], []
         train_labels, test_labels = [], []
+        totals = {}  # keep total count per device for printing later
+
         for file_path in sorted(file_paths):
-            # Extract device index
             device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
             device_name = ' '.join(word.capitalize() for word in device_name.split())
             device_index = device_to_index[device_name]
 
-            # Load embeddings for this device
+            device_embeddings = load_embeddings(file_path)
+            n = len(device_embeddings)
+            totals[device_index] = n
+
+            # compute split index as percentage of this device's samples (slice from beginning)
+            split_idx = int(n * (train_size / 100.0))
+
+            # extend global lists
+            train_embeddings.extend(device_embeddings[:split_idx])
+            test_embeddings.extend(device_embeddings[split_idx:])
+            train_labels.extend([device_index] * split_idx)
+            test_labels.extend([device_index] * (n - split_idx))
+
+            print(f"Device {device_name}: total = {n}, training_length = {split_idx} [{100*(split_idx/n) if n>0 else 0:.2f}%], testing_length = {n - split_idx}")
+
+        # convert to numpy arrays
+        X_train = np.array(train_embeddings)
+        X_test = np.array(test_embeddings)
+        y_train = np.array(train_labels)
+        y_test = np.array(test_labels)
+
+        from collections import Counter
+        train_counts = Counter(y_train)
+        test_counts = Counter(y_test)
+
+        print("\n[Split Stats] Per-device training/testing sample counts:")
+        for device_name, device_index in device_to_index.items():
+            total = totals.get(device_index, 0)
+            train = train_counts[device_index]
+            test = test_counts[device_index]
+            pct = 100 * (train / (train + test)) if (train + test) > 0 else 0.0
+            print(f"{device_name}: Total = {total}, Training = {train} [{pct:.2f}%], Testing = {test}")
+
+        training_length = len(X_train)
+        testing_length = len(X_test)
+        print(f"Percentage split (per-class, no shuffle): Training = {training_length} [{100*(training_length/(training_length+testing_length)):.2f}%], Testing = {testing_length}")
+
+
+    else:
+        # Chronological split based on timestamps
+        train_embeddings, test_embeddings = [], []
+        train_labels, test_labels = [], []
+
+        for file_path in sorted(file_paths):
+            device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
+            device_name = ' '.join(word.capitalize() for word in device_name.split())
+            device_index = device_to_index[device_name]
+
             device_embeddings = load_embeddings(file_path)
 
-            # Determine proportion of first 7 days from the corresponding "seen" file
             root = os.path.basename(file_path).split('.json')[0]
-            seen_file = os.path.join(os.getcwd(), 'preprocessed_data', 'ungrouped', f'{root}.json_seen.txt')
-            dates = []
+            seen_file = os.path.join(os.getcwd(), 'preprocessed_data_merged', 'ungrouped', f'{root}.json.txt')
+
+            timestamps = []
             with open(seen_file, 'r', encoding='utf-8') as sf:
                 for line in sf:
                     m = re.search(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)", line)
                     if m:
-                        dates.append(datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S.%f'))
-            if not dates:
-                raise ValueError(f"No valid timestamps found in {seen_file}")
-            start_dt = dates[0]
-            end_dt = start_dt + timedelta(days=train_size)
-            count = sum(1 for d in dates if d <= end_dt)
-            p = count / len(dates)
+                        timestamps.append(datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S.%f'))
 
-            # Split embeddings chronologically by computed proportion
-            split_idx = int(len(device_embeddings) * p)
+            if not timestamps:
+                raise ValueError(f"No valid timestamps found in {seen_file}")
+
+            start_dt = timestamps[0]
+            end_dt = start_dt + timedelta(days=train_size)
+            print(f"{device_name}: Start date = {start_dt}, End date = {end_dt}")
+
+            split_idx = 0
+            for ts in timestamps:
+                if ts <= end_dt:
+                    split_idx += 1
+                else:
+                    break
+
+            # Split embeddings using the exact line index
             train_embeddings.extend(device_embeddings[:split_idx])
             test_embeddings.extend(device_embeddings[split_idx:])
             train_labels.extend([device_index] * split_idx)
             test_labels.extend([device_index] * (len(device_embeddings) - split_idx))
-            print(f"Device {device_name}: training_length = {split_idx}, testing_length = {len(device_embeddings) - split_idx}")
 
-        # Convert to numpy arrays for training/testing
+            print(f"Device {device_name}: training_length = {split_idx} [{100*(split_idx/(split_idx+(len(device_embeddings) - split_idx))):.2f}%], testing_length = {len(device_embeddings) - split_idx}")
+
         X_train = np.array(train_embeddings)
         X_test = np.array(test_embeddings)
         y_train = np.array(train_labels)
         y_test = np.array(test_labels)
         training_length = len(X_train)
         testing_length = len(X_test)
-        print(f"Custom split: Training = {training_length}, Testing = {testing_length}")
+        print(f"Custom split: Training = {training_length } [{100*(training_length/(training_length+testing_length)):.2f}%], Testing = {testing_length}")
 
-    # Initialize and train the Random Forest classifier
     clf = RandomForestClassifier(n_jobs=-1, n_estimators=500, random_state=42)
     clf.fit(X_train, y_train)
     print('RF Training completed.')
 
-    # Classify with progress bar
     y_pred = []
     for batch in tqdm(np.array_split(X_test, 10), desc='RF Classifying', unit=' batches'):
         y_pred.extend(clf.predict(batch))
@@ -183,17 +248,14 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size, use
 
     print(classification_report(y_test, y_pred, target_names=device_names))
 
-    # --- per-class correct/incorrect counts ---
     for idx, name in enumerate(device_names):
         total = conf_matrix[idx].sum()
         correct = conf_matrix[idx, idx]
         incorrect = total - correct
         print(f"  Class '{name}': Total = {total},  Correct = {correct},  Incorrect = {incorrect}")
 
-        # --- confusion matrix plotting ---
     conf_matrix_percent = conf_matrix.astype('float') / conf_matrix.sum(axis=1)[:, np.newaxis]
     accuracy = np.mean(np.diag(conf_matrix_percent))
-    # Dynamic font sizing
     matrix_size = conf_matrix_percent.shape[0]
     font_size = 100 / matrix_size
     print(f"Font size = {font_size}")
@@ -211,16 +273,14 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size, use
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.png', dpi=300, transparent=True)
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.svg', dpi=300, transparent=True)
     ax.figure.savefig(f'plots/{output_name}_confusion_matrix_rf_{vector_size}.pdf', dpi=300, transparent=True)
-    
-    # Save model and return
-    # model_file = os.path.join('./rfmodels/', f'{output_name}_random_forest_model.pkl')
-    # os.makedirs(os.path.dirname(model_file), exist_ok=True)
+
     buffer = io.BytesIO()
     joblib.dump(clf, buffer)
     file_size_bytes = buffer.tell()
     file_size = file_size_bytes / (1024 * 1024)
 
     return f1_macro, file_size, training_length, testing_length
+
 
 
 
@@ -424,7 +484,7 @@ def main_ext(vector_list, device_low, device_high, group_option, time_group, num
         os.makedirs('plots')
 
     device_range = f"{device_low}-{device_high}"
-    vector_path = os.path.join(os.getcwd(), device_range)
+    vector_path = os.path.join(os.getcwd(), f"{device_range}_merged")
     print(vector_path)
     print(vector_list)
     main(vector_list, device_range, vector_path, group_option, window_size, slide_length, use_percentage_split, train_size)

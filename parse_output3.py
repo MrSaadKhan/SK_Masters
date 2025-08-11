@@ -77,8 +77,8 @@ def plot_records(records, output_image):
 
 
 if __name__ == '__main__':
-    input_file = sys.argv[1] if len(sys.argv) > 1 else 'output3-05.txt'
-    output_image = sys.argv[2] if len(sys.argv) > 2 else 'scores_plot.png'
+    input_file = sys.argv[1] if len(sys.argv) > 1 else 'output3_2-05.txt'
+    output_image = sys.argv[2] if len(sys.argv) > 2 else 'scores_plot2.png'
 
     records = parse_file(input_file)
     if not records:

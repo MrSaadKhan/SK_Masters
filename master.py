@@ -4,6 +4,7 @@ import sys
 import os
 import traceback
 import special
+import new_structure
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -30,7 +31,7 @@ window_size = 10
 slide_length = 1
 
 use_percentage_split = False
-train_size = 7
+train_size = 30
 
 
 subject = "Code Done!"
@@ -45,15 +46,26 @@ try:
         # reset_output()  # Reset output back to the console
 
         # Unifies old file splitting to new format
-        
-
+        # redirect_output_to_file(f"Output2-{device_low}-{device_high_option}.txt")
+        # new_structure.concatenate_embeddings(f"{device_low}-{device_high_option}", True)
+        # new_structure.concatenate_embeddings(f"preprocessed_data", False)
+        # reset_output()
 
         # # Redirect output to file for classify_embeddings
-        redirect_output_to_file(f"output3-{device_low}{device_high_option}.txt")
-        for i in range(1, 31):
+        # redirect_output_to_file(f"output3-{device_low}{device_high_option}.txt")
+        # for i in range(1, 31):
+        #     train_size = i
+        #     classify_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length, use_percentage_split, train_size)
+        #     os.rename(os.path.join(os.getcwd(), "plots"), os.path.join(os.getcwd(), f"plots_{device_high_option}_{use_percentage_split}_{train_size}"))
+
+        redirect_output_to_file(f"output3_2-{device_low}{device_high_option}.txt")
+        use_percentage_split = True
+        i=2
+        while i < 71:
             train_size = i
             classify_embeddings.main_ext(vector_list, device_low, device_high_option, group_option, time_group, num2word_option, window_group, window_size, slide_length, use_percentage_split, train_size)
             os.rename(os.path.join(os.getcwd(), "plots"), os.path.join(os.getcwd(), f"plots_{device_high_option}_{use_percentage_split}_{train_size}"))
+            i+=2
 
         reset_output()  # Reset output back to the console
 
