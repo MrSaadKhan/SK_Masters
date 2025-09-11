@@ -127,10 +127,12 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size, use
     #     print(f"Percentage split: Training = {training_length} [{100*(training_length/(training_length+testing_length)):.2f}%], Testing = {testing_length}")
 
     if use_percentage_split:
-        # Per-class percentage split: take the first train_size% of samples from each device file (no shuffle)
+        # Per-class percentage split with frozen last-30% as test set (no shuffle)
         train_embeddings, test_embeddings = [], []
         train_labels, test_labels = [], []
         totals = {}  # keep total count per device for printing later
+
+        frozen_test_pct = 0.30  # last 30% is reserved for testing (changeable)
 
         for file_path in sorted(file_paths):
             device_name = os.path.basename(file_path).split('.json')[0].replace('_', ' ')
@@ -141,16 +143,29 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size, use
             n = len(device_embeddings)
             totals[device_index] = n
 
-            # compute split index as percentage of this device's samples (slice from beginning)
-            split_idx = int(n * (train_size / 100.0))
+            # --- NEW: reserve last 30% (floored) as the test set ---
+            test_count = int(n * frozen_test_pct)
+            # ensure non-negative
+            test_count = max(0, test_count)
 
-            # extend global lists
-            train_embeddings.extend(device_embeddings[:split_idx])
-            test_embeddings.extend(device_embeddings[split_idx:])
-            train_labels.extend([device_index] * split_idx)
-            test_labels.extend([device_index] * (n - split_idx))
+            # available samples that can be used for training (i.e., not in reserved test)
+            available_for_train = max(0, n - test_count)
 
-            print(f"Device {device_name}: total = {n}, training_length = {split_idx} [{100*(split_idx/n) if n>0 else 0:.2f}%], testing_length = {n - split_idx}")
+            # requested training count from beginning (first train_size% of samples)
+            requested_split_idx = int(n * (train_size / 100.0))
+
+            # cap so training never overlaps reserved test samples
+            split_idx = min(requested_split_idx, available_for_train)
+
+            # training = first `split_idx`; testing = last `test_count`
+            if split_idx > 0:
+                train_embeddings.extend(device_embeddings[:split_idx])
+                train_labels.extend([device_index] * split_idx)
+            if test_count > 0:
+                test_embeddings.extend(device_embeddings[-test_count:])
+                test_labels.extend([device_index] * test_count)
+
+            print(f"Device {device_name}: total = {n}, training_length = {split_idx} [{100*(split_idx/n) if n>0 else 0:.2f}%], testing_length = {test_count}")
 
         # convert to numpy arrays
         X_train = np.array(train_embeddings)
@@ -173,7 +188,6 @@ def classify_embeddings_random_forest(folder_path, output_name, vector_size, use
         training_length = len(X_train)
         testing_length = len(X_test)
         print(f"Percentage split (per-class, no shuffle): Training = {training_length} [{100*(training_length/(training_length+testing_length)):.2f}%], Testing = {testing_length}")
-
 
     else:
         # Chronological split based on timestamps

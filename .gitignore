@@ -1,5 +1,6 @@
 /old_plots_iterative
 /__pycache__
+/.old*
 /bert_embeddings
 /fast_text_embeddings
 nature_remo.json_xiaomi_mijia_led.json_irobot_roomba.json_planex_smacam_pantilt.json_jvc_kenwood_hdtv_ip_camera.json_fasttext_model

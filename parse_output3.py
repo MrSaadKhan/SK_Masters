@@ -26,6 +26,7 @@ def parse_file(input_path):
         r"^Training RF Classifier using the options: use_percentage_split:\s*(?P<use_pct>True|False),\s*train_size:\s*(?P<train_size>\d+)$"
     )
     score_pattern = re.compile(r"^RF Macro F1 Score:\s*(?P<score>\d+\.\d+)$")
+    # score_pattern = re.compile(r"^RF Weighted F1 Score:\s*(?P<score>\d+\.\d+)$")
 
     current_option = None
     current_train_size = None

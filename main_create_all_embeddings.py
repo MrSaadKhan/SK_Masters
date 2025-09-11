@@ -24,32 +24,29 @@ def memory_monitor(output_dir, stop_event, mem_start):
             time.sleep(0.001)  # 1 millisecond delay
     print(f"Memory measurements saved to {output_file}")
 
-def plot_numbers_from_file(file_path):
+def plot_numbers_from_file(file_path, downsample_factor=100):
     file_path = os.path.join(file_path, "memory_measurements.txt")
-    # List to hold the numbers from each line
     numbers = []
     
-    # Read numbers from the file
+    # Read and downsample
     with open(file_path, 'r') as file:
-        for line in file:
-            try:
-                # Convert line to float and add to list
-                numbers.append(float(line.strip()))
-            except ValueError:
-                print(f"Skipping invalid line: {line.strip()}")
-    
+        for i, line in enumerate(file):
+            if i % downsample_factor == 0:  # keep only every nth line
+                try:
+                    numbers.append(float(line.strip()))
+                except ValueError:
+                    print(f"Skipping invalid line: {line.strip()}")
+
     # Plot the numbers
     plt.figure()
-    plt.plot(numbers, marker='x', linestyle='-', markersize=5)  # Adjust marker size if needed
-    plt.title("Numbers from File")
-    plt.xlabel("Milliseconds")
+    plt.plot(numbers, marker='x', linestyle='-', markersize=3)  
+    plt.title("Numbers from File (Downsampled)")
+    plt.xlabel("Sample Index (Downsampled)")
     plt.ylabel("Memory (MB)")
-    
-    # Set y-axis to start from zero
-    # plt.ylim(bottom=0)
 
+    # Save the plot
     save_path = os.path.join(os.path.dirname(file_path), "plot.png")
-    plt.savefig(save_path, dpi=600)  # Set dpi for sharper image
+    plt.savefig(save_path, dpi=600)
     plt.close()
     print(f"Plot saved at {save_path}")
 
@@ -179,6 +176,13 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     device_list = device_list[:device_high - device_low]
     device_list = inclusion_list
 
+    device_list = [
+    # "au_network_camera.json",          # Network Camera
+    # "jvc_kenwood_hdtv_ip_camera.json",  # JVC Camera
+    # "line_clova_wave.json",             # Line Smart Speaker
+    # "planex_smacam_outdoor.json",       # Planex Outdoor Camera
+    "planex_smacam_pantilt.json"        # Planex PanTilt Camera
+    ]
     print(device_list)
 
     gc.collect()
@@ -234,22 +238,22 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     # process.join()
     # plot_numbers_from_file(FastText_path)
     #############################################################
-    # new_dir = os.path.join(save_dir, 'BERT')
-    # bert_path = new_dir
-    # if not os.path.exists(new_dir):
-    #     os.mkdir(new_dir)
+    new_dir = os.path.join(save_dir, 'BERT')
+    bert_path = new_dir
+    if not os.path.exists(new_dir):
+        os.mkdir(new_dir)
     
-    # mem_start_BERT = psutil.virtual_memory().used / (1024 ** 2)
-    # stop_event = multiprocessing.Event()  # Create the stop event
-    # process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_BERT))
-    # process.start()
-    # start_time = time.time()
-    # seen, unseen, temp = create_bert_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
-    # bert_time = time.time() - start_time
-    # print(f"BERT total embedding time: {format_duration(bert_time)}")
-    # stop_event.set()  # Signal the memory monitor to stop
-    # process.join()
-    # plot_numbers_from_file(bert_path)
+    mem_start_BERT = psutil.virtual_memory().used / (1024 ** 2)
+    stop_event = multiprocessing.Event()  # Create the stop event
+    process = multiprocessing.Process(target=memory_monitor, args=(new_dir, stop_event, mem_start_BERT))
+    process.start()
+    start_time = time.time()
+    seen, unseen, temp = create_bert_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, vector_size)
+    bert_time = time.time() - start_time
+    print(f"BERT total embedding time: {format_duration(bert_time)}")
+    stop_event.set()  # Signal the memory monitor to stop
+    process.join()
+    plot_numbers_from_file(bert_path)
     #############################################################
     # new_dir = os.path.join(save_dir, 'GPT2')
     # GPT_path = new_dir
@@ -286,7 +290,7 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     plot_numbers_from_file(new_dir)
     mamba_mem_usage = highest_value_without_outliers(os.path.join(new_dir, "memory_measurements.txt"))
 ################################################
-    temp = None
+    # temp = None
 
     if temp is not None:
         bert_embeddings_creation_time = bert_time
