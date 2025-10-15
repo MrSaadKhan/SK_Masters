@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-# new_pipeline2_rf_sweep_with_cache_stream_incremental_fixed.py
+# new_pipeline2_rf_sweep_with_cache_stream_incremental_fixed_with_cm_pptx.py
 """
 Sweep RF_TRAIN_PCT from 2% to 70% (step 2%), reuse existing per-device embedding caches,
 and only compute embeddings for devices that are missing or invalid.
 
-FIX: Use numpy.lib.format.open_memmap to create true .npy files (with header) so
-      np.load(..., mmap_mode='r') works reliably. Also robustly handle old/broken
-      files that were created without headers (previous raw memmap writes).
+Enhancements in this version:
+ - robust .npy creation using numpy.lib.format.open_memmap
+ - streaming write of embeddings to avoid OOM
+ - saves confusion matrices (png, svg, pdf) for each sweep step under embeddings/confusion_matrices/
+ - compiles a PowerPoint (PPTX) with one slide per confusion matrix. Slide title shows the train %
+   and the macro F1.
 """
 import os
 import csv
@@ -19,6 +22,14 @@ from transformers import BertTokenizer, BertModel
 import torch
 import sys
 import matplotlib.pyplot as plt
+from datetime import datetime
+
+# try to import python-pptx; if missing we'll raise a clear error when needed
+try:
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+except Exception:
+    Presentation = None
 
 # ---------------- Config ----------------
 device_list = [
@@ -46,6 +57,10 @@ RF_N_JOBS = -1
 
 # Embedding cache folder
 EMB_DIR = "embeddings"
+
+# Confusion matrix outputs
+CM_DIR = os.path.join(EMB_DIR, "confusion_matrices")
+os.makedirs(CM_DIR, exist_ok=True)
 
 # Misc / performance
 BATCH_TOKEN_MAX_LEN = 512
@@ -109,6 +124,7 @@ def interleave_round_robin(per_device_lists, devices_order, device_label_map):
 
 # ---------------- Prepare environment ----------------
 os.makedirs(EMB_DIR, exist_ok=True)
+os.makedirs(CM_DIR, exist_ok=True)
 
 print("Loading tokenizer and BERT (this may take a moment)...")
 tokenizer = BertTokenizer.from_pretrained(BERT_MODEL_NAME)
@@ -116,6 +132,7 @@ bert_model = BertModel.from_pretrained(BERT_MODEL_NAME).to(DEVICE)
 bert_model.eval()  # not fine-tuning here
 
 device_label_map = {dev: idx for idx, dev in enumerate(device_list)}
+device_short_names = [d.replace('.json', '') for d in device_list]
 
 # ---------------- Precompute / load lines and set up caches ----------------
 per_device_lines = {}
@@ -349,11 +366,88 @@ def compute_missing_embeddings(devices):
     for device in to_compute:
         compute_and_cache_embeddings_stream(device, batch_size=EMBED_BATCH_SIZE)
 
-# compute missing caches once (so reruns with added/changed device_list reuse existing caches)
+# ---------------- plotting / saving confusion matrix + PPTX helpers ----------------
+def save_confusion_matrix_images(cm, class_names, out_base, title_text):
+    """
+    Save confusion matrix in multiple formats:
+      out_base: full path without extension. e.g. embeddings/confusion_matrices/confusion_RFtrain_02pct
+    Saves: .png, .svg, .pdf with dpi=300 and transparent=True
+    Returns dict of saved file paths.
+    """
+    # create figure
+    fig, ax = plt.subplots(figsize=(8, 6))
+    im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    ax.set_title(title_text)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    # tick labels
+    n = len(class_names)
+    ax.set_xticks(np.arange(n))
+    ax.set_yticks(np.arange(n))
+    ax.set_xticklabels(class_names, rotation=45, ha="right")
+    ax.set_yticklabels(class_names)
+
+    # annotate counts
+    thresh = cm.max() / 2.0 if cm.max() > 0 else 0
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, format(cm[i, j], 'd'),
+                    ha="center", va="center",
+                    color="white" if cm[i, j] > thresh else "black")
+
+    plt.tight_layout()
+
+    paths = {}
+    for ext in ("png", "svg", "pdf"):
+        p = f"{out_base}.{ext}"
+        fig.savefig(p, dpi=300, transparent=True)
+        paths[ext] = p
+
+    # Also save a PNG with .png for quick viewing (already saved), return paths
+    plt.close(fig)
+    return paths
+
+def add_slide_with_image(prs, image_path, slide_title):
+    """
+    Add a slide with a title and the image inserted (centered).
+    prs: Presentation() object
+    image_path: path to PNG (or other) image
+    slide_title: string
+    """
+    if Presentation is None:
+        raise RuntimeError("python-pptx is required to create PPTX. Install with `pip install python-pptx`")
+
+    # choose a blank layout; fallback if index 6 not present
+    layout_index = 6 if len(prs.slide_layouts) > 6 else 5
+    slide = prs.slides.add_slide(prs.slide_layouts[layout_index])
+
+    # Title textbox
+    left = Inches(0.5)
+    top = Inches(0.2)
+    width = Inches(9)
+    height = Inches(0.6)
+    title_box = slide.shapes.add_textbox(left, top, width, height)
+    tf = title_box.text_frame
+    p = tf.paragraphs[0]
+    p.text = slide_title
+    p.font.size = Pt(18)
+
+    # Insert image below title
+    img_left = Inches(0.5)
+    img_top = Inches(1.0)
+    img_width = Inches(9.0)
+    try:
+        slide.shapes.add_picture(image_path, img_left, img_top, width=img_width)
+    except Exception as e:
+        # If add_picture fails (format), skip insertion but keep slide with title
+        print(f"  Warning: could not insert image {image_path} into PPTX slide: {e}")
+
+# ---------------- New: compute only missing embeddings up-front ----------------
 compute_missing_embeddings(device_list)
 
 # ---------------- Sweep loop (uses memmaps) ----------------
 results = []  # list of dicts: {'rf_train_pct': pct, 'macro_f1': val, 'n_train': n, 'n_val': n}
+cm_saved_records = []  # records of saved confusion matrix image paths and metadata (for pptx)
 
 rf_train_pcts = np.arange(START_PCT, END_PCT + 1e-9, STEP_PCT)
 for pct in rf_train_pcts:
@@ -414,8 +508,8 @@ for pct in rf_train_pcts:
         t_idxs = per_device_train_emb_idxs[device]
         v_idxs = per_device_val_emb_idxs[device]
         # Instead of slicing entire arrays at once, we create lists of 1D arrays referenced from memmap
-        per_device_train_lists[device] = [emb_mm[i] for i in t_idxs] if len(t_idxs) > 0 else []
-        per_device_val_lists[device]   = [emb_mm[i] for i in v_idxs] if len(v_idxs) > 0 else []
+        per_device_train_lists[device] = [np.array(emb_mm[i], dtype=np.float32) for i in t_idxs] if len(t_idxs) > 0 else []
+        per_device_val_lists[device]   = [np.array(emb_mm[i], dtype=np.float32) for i in v_idxs] if len(v_idxs) > 0 else []
 
     # Interleave
     train_emb_list, train_labels = interleave_round_robin(per_device_train_lists, device_list, device_label_map)
@@ -445,6 +539,27 @@ for pct in rf_train_pcts:
     f1m = f1_score(y_val, y_pred, average='macro')
     print(f"  -> Macro F1 at RF_TRAIN_PCT={RF_TRAIN_PCT*100:.1f}%: {f1m:.4f}")
 
+    # confusion matrix
+    cm = confusion_matrix(y_val, y_pred, labels=list(range(len(device_list))))
+    classes = [d.replace('.json', '') for d in device_list]
+
+    # save confusion matrices images in multiple formats
+    out_base = os.path.join(CM_DIR, f"confusion_RFtrain_{int(RF_TRAIN_PCT*100):02d}pct")
+    title_text = f"RF Train {RF_TRAIN_PCT*100:.1f}% — Macro F1: {f1m:.4f}"
+    saved = save_confusion_matrix_images(cm, classes, out_base, title_text)
+
+    # record for PPTX
+    cm_saved_records.append({
+        "pct": RF_TRAIN_PCT,
+        "macro_f1": float(f1m),
+        "n_train": int(X_train.shape[0]),
+        "n_val": int(X_val.shape[0]),
+        "img_png": saved.get("png"),
+        "img_svg": saved.get("svg"),
+        "img_pdf": saved.get("pdf"),
+        "cm": cm
+    })
+
     results.append({
         "rf_train_pct": RF_TRAIN_PCT,
         "macro_f1": float(f1m),
@@ -470,21 +585,52 @@ pcts = [r["rf_train_pct"] * 100.0 for r in results]  # percent
 f1s = [r["macro_f1"] for r in results]
 
 plt.figure(figsize=(8, 5))
-plt.plot(pcts, f1s, marker='o')  # default matplotlib styling
+plt.plot(pcts, f1s, marker='o')
 plt.xlabel("RF_TRAIN_PCT (%)")
 plt.ylabel("Macro F1 (validation)")
 plt.title("RF training size (pct of file) vs Macro F1 (validation, last 30% per device)")
 plt.grid(True)
 plt.tight_layout()
 plot_path = "rf_train_pct_vs_f1.png"
-plt.savefig(plot_path)
+plt.savefig(plot_path, dpi=300, transparent=True)
 print(f"Saved plot to: {plot_path}")
 
 print("\nSummary results (RF_TRAIN_PCT%, n_train, n_val, macro_f1):")
 for r in results:
     print(f"  {r['rf_train_pct']*100:5.1f}%  |  n_train={r['n_train']:6d}  n_val={r['n_val']:6d}  macro_f1={r['macro_f1']:.4f}")
 
+# ---------------- Create PPTX containing confusion matrices ----------------
+if Presentation is None:
+    print("\nSkipping PPTX creation: python-pptx not installed. Install via `pip install python-pptx` to enable.")
+else:
+    prs = Presentation()
+    # add a title slide (optional)
+    try:
+        title_slide_layout = prs.slide_layouts[0]
+        slide = prs.slides.add_slide(title_slide_layout)
+        slide.shapes.title.text = "Confusion Matrices — RF train pct sweep"
+        subtitle = slide.placeholders[1]
+        subtitle.text = f"Generated: {datetime.utcnow().isoformat()} UTC"
+    except Exception:
+        pass
+
+    for rec in cm_saved_records:
+        pct = rec["pct"]
+        macro = rec["macro_f1"]
+        n_train = rec["n_train"]
+        n_val = rec["n_val"]
+        png = rec["img_png"]
+        title = f"RF Train {pct*100:.1f}% — Macro F1: {macro:.4f} — n_train={n_train} n_val={n_val}"
+        add_slide_with_image(prs, png, title)
+
+    pptx_path = os.path.join(EMB_DIR, f"confusion_matrices_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.pptx")
+    prs.save(pptx_path)
+    print(f"\nSaved PowerPoint with confusion matrices to: {pptx_path}")
+
 print("\nDone. Files generated:")
 print(f"  - {csv_path}")
 print(f"  - {plot_path}")
+print(f"  - confusion matrices in: {CM_DIR} (png/svg/pdf)")
+if Presentation is not None:
+    print(f"  - PPTX: {pptx_path}")
 print(f"  - embedding files (per device) in folder: {EMB_DIR}")
