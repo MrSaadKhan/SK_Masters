@@ -3,7 +3,7 @@
 Demo: generate a Mamba embedding for a single sentence
 """
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+from transformers import AutoTokenizer, AutoModel, AutoConfig
 
 # ------------------------------------------------------------------
 # Config – pick any pre-trained Mamba model you have locally.
@@ -11,11 +11,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 #   • `mamba-370m-hf` → hidden_size = 1024
 #   • `mamba-790m-hf` → hidden_size = ???
 # ------------------------------------------------------------------
-MODEL_NAME = "state-spaces/mamba-130m-hf"
-MAX_TOKENS  = 2000          # truncate / pad to this many tokens
+# MODEL_NAME = "state-spaces/mamba-130m-hf"
+MODEL_NAME = "google-bert/bert-base-uncased"
+MAX_TOKENS  = 512          # truncate / pad to this many tokens
 
 def get_sentence_embedding(sentence: str, tokenizer, model) -> torch.Tensor:
-    """Average-pool the last hidden state over the *non-padding* tokens."""
     inputs = tokenizer(
         sentence,
         return_tensors="pt",
@@ -25,21 +25,18 @@ def get_sentence_embedding(sentence: str, tokenizer, model) -> torch.Tensor:
     )
 
     with torch.no_grad():
-        # `output_hidden_states=True` can be set here or in the config
         outputs = model(**inputs, output_hidden_states=True)
 
-    last = outputs.hidden_states[-1][0]            # (seq_len, hidden)
-    mask = inputs["attention_mask"][0].unsqueeze(-1)  # (seq_len, 1)
+    # CLS token embedding (index 0)
+    cls_emb = outputs.hidden_states[-1][0][0]
+    return cls_emb
 
-    summed  = (last * mask).sum(dim=0)             # (hidden,)
-    count   = mask.sum()                           # scalar
-    return summed / count                          # (hidden,)
 
 def main() -> None:
     print(f"Loading model “{MODEL_NAME}” …")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     cfg        = AutoConfig.from_pretrained(MODEL_NAME)
-    model      = AutoModelForCausalLM.from_pretrained(MODEL_NAME, config=cfg)
+    model      = AutoModel.from_pretrained(MODEL_NAME, config=cfg)
     model.eval().to("cpu")                         # stays on CPU
 
     sentence = input("\nEnter a sentence: ").strip()

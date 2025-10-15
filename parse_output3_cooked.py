@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
 """
-Script to parse RF Macro F1 scores from an input log file, print them, plot with Matplotlib,
-and save two figures (one for use_percentage_split=True, one for use_percentage_split=False).
-
-Usage:
-    python parse_scores.py [input_file] [output_image_base]
-
-If you give an output image like "scores.png" or "scores", the script will produce:
-    scores_true.png
-    scores_false.png
-
-It strictly matches these lines (in order):
-  option is: <option_name>
-  Training RF Classifier using the options: use_percentage_split: <True|False>, train_size: <int>
-  RF Macro F1 Score: <float>
-
+Modified version:
+- Only consider train_size <= 70
+- Divide train_size by 0.7 before plotting
+- Fix y-axis (0.50–1.00) and x-axis (0–100)
 """
 
 import re
@@ -24,13 +13,8 @@ import matplotlib.pyplot as plt
 
 
 def parse_file(input_path):
-    """
-    Returns list of tuples:
-      (option: str, use_pct: bool, train_size: int, score: float)
-    """
     records = []
 
-    # Strict regex patterns
     option_pattern = re.compile(r"^option is:\s*(?P<option>\w+)$")
     training_pattern = re.compile(
         r"^Training RF Classifier using the options: use_percentage_split:\s*(?P<use_pct>True|False),\s*train_size:\s*(?P<train_size>\d+)$"
@@ -48,7 +32,6 @@ def parse_file(input_path):
             m = option_pattern.match(line)
             if m:
                 current_option = m.group('option')
-                # reset the rest so we require the sequence option -> training -> score
                 current_train_size = None
                 current_use_pct = None
                 continue
@@ -62,9 +45,15 @@ def parse_file(input_path):
             m = score_pattern.match(line)
             if m:
                 score = float(m.group('score'))
-                if current_option and current_train_size is not None and current_use_pct is not None:
-                    records.append((current_option, current_use_pct, current_train_size, score))
-                # After recording, clear so next triplet must appear fresh
+                if (
+                    current_option
+                    and current_train_size is not None
+                    and current_use_pct is not None
+                    and current_train_size <= 70  # <-- only include up to 70
+                ):
+                    # divide train_size by 0.7
+                    adjusted_size = current_train_size / 0.7
+                    records.append((current_option, current_use_pct, adjusted_size, score))
                 current_option = None
                 current_train_size = None
                 current_use_pct = None
@@ -73,20 +62,12 @@ def parse_file(input_path):
 
 
 def plot_records(records, output_base):
-    """
-    Create two plots:
-      <output_base>_true.png  -- for records where use_pct is True
-      <output_base>_false.png -- for records where use_pct is False
-    Each plot contains one line per 'option' showing train_size -> score.
-    """
-    # Normalize base name (strip extension if present)
     base, ext = os.path.splitext(output_base)
     if not base:
-        base = output_base  # safe fallback
-    true_path = f"{base}_true.png"
-    false_path = f"{base}_false.png"
+        base = output_base
+    true_path = f"{base}_true.svg"
+    false_path = f"{base}_false.svg"
 
-    # Partition records by use_pct
     by_use = {True: [], False: []}
     for option, use_pct, size, score in records:
         by_use[use_pct].append((option, size, score))
@@ -97,7 +78,6 @@ def plot_records(records, output_base):
             print(f"No records for use_percentage_split={use_val}; skipping plot {use_val}.")
             continue
 
-        # Organize by option
         data = {}
         for option, size, score in recs:
             data.setdefault(option, []).append((size, score))
@@ -108,37 +88,41 @@ def plot_records(records, output_base):
             xs, ys = zip(*vals_sorted)
             plt.plot(xs, ys, marker='o', label=option)
 
+        plt.ylim(0.50, 1.00)   # <-- fixed y-axis
+        plt.xlim(0, 100)       # <-- fixed x-axis
+
         if use_val:
             plt.xlabel('Training Percentage (train_size)')
             plt.title(f'RF Macro F1 Score vs. Training Percentage (use_percentage_split={use_val})')
         else:
             plt.xlabel('Days of training (train_size)')
             plt.title(f'RF Macro F1 Score vs. Training Days (use_percentage_split={use_val})')
+
         plt.ylabel('RF Macro F1 Score')
-        
         plt.legend()
         plt.tight_layout()
         out_path = true_path if use_val else false_path
-        plt.savefig(out_path)
+        plt.savefig(out_path, dpi=300, transparent=True)
         plt.close()
         print(f"Plot saved to {out_path}")
 
 
 if __name__ == '__main__':
     input_file = sys.argv[1] if len(sys.argv) > 1 else 'output3-05.txt'
-    output_image = sys.argv[2] if len(sys.argv) > 2 else 'scores_plot-05.png'
+    output_image = sys.argv[2] if len(sys.argv) > 2 else 'scores_plot-05_cooked.svg'
 
-    # input_file = sys.argv[1] if len(sys.argv) > 1 else 'output3-07.txt'
-    # output_image = sys.argv[2] if len(sys.argv) > 2 else 'scores_plot.png'
+    # base_path = r"C:\Users\Saad Khan\OneDrive - UNSW\University\6th Yr\T3\Masters Project C\Results\EXP 1 - Iterative Classifier_Individual\Percentage-not random- freeze testing 30"
+
+    # input_file = os.path.join(base_path, input_file)
+    # output_image = os.path.join(base_path, output_image)
 
     records = parse_file(input_file)
     if not records:
         print("No records found. Check your input file and regex patterns.")
         sys.exit(1)
 
-    # Print records (including use_percentage_split)
-    print("Parsed records (option, use_percentage_split, train_size, score):")
+    print("Parsed records (option, use_percentage_split, train_size/0.7, score):")
     for option, use_pct, size, score in records:
-        print(f"{option}, {use_pct}, {size}, {score}")
+        print(f"{option}, {use_pct}, {size:.2f}, {score}")
 
     plot_records(records, output_image)

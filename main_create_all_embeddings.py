@@ -177,11 +177,19 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     device_list = inclusion_list
 
     device_list = [
-    # "au_network_camera.json",          # Network Camera
-    # "jvc_kenwood_hdtv_ip_camera.json",  # JVC Camera
-    # "line_clova_wave.json",             # Line Smart Speaker
-    # "planex_smacam_outdoor.json",       # Planex Outdoor Camera
+    "au_network_camera.json",          # Network Camera
+    "jvc_kenwood_hdtv_ip_camera.json",  # JVC Camera
+    "line_clova_wave.json",             # Line Smart Speaker
+    "planex_smacam_outdoor.json",       # Planex Outdoor Camera
     "planex_smacam_pantilt.json"        # Planex PanTilt Camera
+    ]
+
+    device_list = [
+    "irobot_roomba.json",
+    "line_clova_wave.json",
+    "nature_remo.json",
+    "qrio_hub.json",
+    "xiaomi_mijia_led.json"
     ]
     print(device_list)
 
@@ -281,7 +289,7 @@ def main(device_low, device_high, save_dir, data_path, group_option, word_embedd
     process.start()
     start_time = time.time()
 
-    seen, unseen = create_mamba_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, 512)#2555)
+    seen, unseen = create_mamba_embeddings.create_embeddings(file_path, device_list, new_dir, data_path, group_option, word_embedding_option, window_size, slide_length, 1910)#2555)
 
     mamba_time = time.time() - start_time
     stop_event.set()

@@ -1,6 +1,7 @@
 /old_plots_iterative
 /__pycache__
 /.old*
+/.new*
 /bert_embeddings
 /fast_text_embeddings
 nature_remo.json_xiaomi_mijia_led.json_irobot_roomba.json_planex_smacam_pantilt.json_jvc_kenwood_hdtv_ip_camera.json_fasttext_model
@@ -17,6 +18,8 @@ nature_remo_xiaomi_mijia_led_fasttext_model_128.wv.vectors_ngrams.npy
 nature_remo_xiaomi_mijia_led_fasttext_model_128
 /plots
 /rfmodels
+/embeddings*
+/saved_flow_classifier_txt*
 /0-5*
 /0-10
 /flow_plots*
