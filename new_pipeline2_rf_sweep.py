@@ -6,8 +6,9 @@ Extended: baseline + finetuned comparisons with RF feedback during finetune.
 Changes:
  - student receives RF feedback: it is rewarded for agreeing with a fixed RF when RF is correct,
    and pushed away from RF when RF is incorrect.
- - RF teacher is trained once on baseline embeddings from first 20% per-device (assumption).
+ - RF teacher is trained once on baseline embeddings from first FINE_PCT per-device (assumption).
  - Minimal other changes; anchor + prototype + classification + RF-alignment losses combined.
+ - New flag REUSE_FINETUNE_EMBS_IF_PRESENT to skip finetuning when all .ft.npy files exist.
 """
 import os
 import csv
@@ -19,7 +20,6 @@ from sklearn.metrics import confusion_matrix, f1_score
 from transformers import BertTokenizer, BertModel
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import sys
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -49,10 +49,13 @@ END_PCT = 0.70
 STEP_PCT = 0.02
 RF_VAL_PCT = 0.30   # fixed: reserve last 30% per device for validation
 
-
-
 # Fine-tune specification
-FINE_PCT = 0.01     # *** IMPORTANT: the fine-tune data is the FIRST 20% per device. single student trained once ***
+# IMPORTANT: FINETUNE uses the FIRST FINE_PCT per-device (single student trained once)
+FINE_PCT = 0.20     # first 20% per device used for fine-tuning (single student)
+
+# If True: and valid finetuned embeddings (.ft.npy) exist for *all* devices, skip finetuning.
+# If False: always (re)run finetuning and overwrite .ft embeddings.
+REUSE_FINETUNE_EMBS_IF_PRESENT = True
 
 # BERT / RF config
 BERT_MODEL_NAME = 'bert-base-uncased'
@@ -354,6 +357,29 @@ def compute_missing_embeddings(devices):
     for device in to_compute:
         compute_and_cache_embeddings_stream(device, batch_size=EMBED_BATCH_SIZE)
 
+# ---------------- Additional helper: check if finetuned embeddings exist for all devices ----------------
+def all_finetuned_embeddings_exist(devices, suffix=".ft"):
+    hidden_size = bert_model.config.hidden_size
+    for device in devices:
+        emb_npy_path = os.path.join(EMB_DIR, f"{device.replace('.json','')}.emb{suffix}.npy")
+        if not os.path.exists(emb_npy_path):
+            return False
+        try:
+            arr = np.load(emb_npy_path, mmap_mode='r')
+            if arr.ndim == 1:
+                if arr.size % hidden_size == 0:
+                    rows = arr.size // hidden_size
+                    arr = arr.reshape((rows, hidden_size))
+                else:
+                    return False
+            if arr.ndim != 2:
+                return False
+            if arr.shape[0] != per_device_total_lines[device]:
+                return False
+        except Exception:
+            return False
+    return True
+
 # ---------------- plotting / saving confusion matrix + PPTX helpers ----------------
 def normalize_cm_rows(cm):
     cm = cm.astype(float)
@@ -413,7 +439,7 @@ def add_slide_with_image(prs, image_path, slide_title):
 # ---------------- Compute baseline embeddings if missing ----------------
 compute_missing_embeddings(device_list)
 
-# ---------------- Build the SINGLE finetune set (first 20% per device) ----------------
+# ---------------- Build the SINGLE finetune set (first FINE_PCT per device) ----------------
 # We will train one student on the first FINE_PCT per-device (interleaved)
 per_device_fine_idxs = {}
 all_fine_texts = []
@@ -437,9 +463,9 @@ fine_texts, fine_labels = interleave_round_robin(per_device_texts_map, device_li
 
 print(f"\nPrepared global fine-tune set from first {FINE_PCT*100:.1f}% per device: total fine examples = {len(fine_texts)}")
 
-# ---------------- TRAIN a fixed RF teacher on baseline embeddings of the FIRST 20% (ASSUMPTION) ----------------
-# Build baseline embeddings for the first-20% selection (we already have .emb.npy files)
-print("\nTraining fixed RF teacher on baseline embeddings from the FIRST 20% (assumption)...")
+# ---------------- TRAIN a fixed RF teacher on baseline embeddings of the FIRST FINE_PCT (ASSUMPTION) ----------------
+# Build baseline embeddings for the first-FINE_PCT selection (we already have .emb.npy files)
+print("\nTraining fixed RF teacher on baseline embeddings from the FIRST fine block (assumption)...")
 X_teacher = []
 y_teacher = []
 for device in device_list:
@@ -460,134 +486,172 @@ rf_teacher = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, n_jobs=RF_N_JO
 rf_teacher.fit(X_teacher, y_teacher)
 print("  RF teacher trained.")
 
+# ---------------- Decide whether to finetune or reuse existing finetuned embeddings ----------------
+skip_finetune = False
+if REUSE_FINETUNE_EMBS_IF_PRESENT:
+    ok = all_finetuned_embeddings_exist(device_list, suffix=".ft")
+    if ok:
+        print("\nAll finetuned embeddings (.ft.npy) already exist and REUSE_FINETUNE_EMBS_IF_PRESENT=True -> skipping finetuning.")
+        skip_finetune = True
+    else:
+        print("\nFinetuned embeddings not present for all devices (or invalid); will perform finetuning and write .ft embeddings.")
+else:
+    print("\nREUSE_FINETUNE_EMBS_IF_PRESENT=False -> (re)running finetuning regardless of existing .ft files.")
+    # If user chooses to not reuse, we'll run finetune and overwrite.
+
 # ---------------- STUDENT FINETUNE (single student trained ONCE using fine_texts) ----------------
-print("\nStarting single student fine-tune using first-20% interleaved examples (with RF feedback)...")
-# Prepare orig anchors and prototypes (orig CLS over fine_texts) using bert_model
-orig_cls_parts = []
-for i in range(0, len(fine_texts), FT_BATCH_SIZE):
-    batch = fine_texts[i:i+FT_BATCH_SIZE]
-    enc = tokenizer(batch, return_tensors='pt', truncation=True, max_length=BATCH_TOKEN_MAX_LEN, padding=True).to(DEVICE)
-    with torch.no_grad():
-        out = bert_model(**enc)
-        cls = out.last_hidden_state[:, 0, :].cpu().numpy()
-    orig_cls_parts.append(cls)
-orig_cls_all = np.vstack(orig_cls_parts)
-labels_arr = np.array(fine_labels, dtype=int)
+student_bert = None
+if not skip_finetune:
+    print("\nStarting single student fine-tune using first-FINE_PCT interleaved examples (with RF feedback)...")
+    # Prepare orig anchors and prototypes (orig CLS over fine_texts) using bert_model
+    orig_cls_parts = []
+    for i in range(0, len(fine_texts), FT_BATCH_SIZE):
+        batch = fine_texts[i:i+FT_BATCH_SIZE]
+        enc = tokenizer(batch, return_tensors='pt', truncation=True, max_length=BATCH_TOKEN_MAX_LEN, padding=True).to(DEVICE)
+        with torch.no_grad():
+            out = bert_model(**enc)
+            cls = out.last_hidden_state[:, 0, :].cpu().numpy()
+        orig_cls_parts.append(cls)
+    orig_cls_all = np.vstack(orig_cls_parts)
+    labels_arr = np.array(fine_labels, dtype=int)
 
-# centroids from orig
-num_classes = len(device_list)
-centroids = np.zeros((num_classes, orig_cls_all.shape[1]), dtype=np.float32)
-for c in range(num_classes):
-    idxs = np.where(labels_arr == c)[0]
-    if len(idxs) > 0:
-        centroids[c] = orig_cls_all[idxs].mean(axis=0)
+    # centroids from orig
+    num_classes = len(device_list)
+    centroids = np.zeros((num_classes, orig_cls_all.shape[1]), dtype=np.float32)
+    for c in range(num_classes):
+        idxs = np.where(labels_arr == c)[0]
+        if len(idxs) > 0:
+            centroids[c] = orig_cls_all[idxs].mean(axis=0)
 
-# Build FT dataset (same shape as prior FTData but simplified)
-class FTData:
-    def __init__(self, texts, labels, orig_embs, centroids):
-        self.texts = texts
-        self.labels = labels
-        self.orig_embs = orig_embs.astype(np.float32)
-        self.centroids = centroids
-    def __len__(self):
-        return len(self.texts)
-    def __getitem__(self, idx):
-        label = self.labels[idx]
-        return self.texts[idx], int(label), self.orig_embs[idx], self.centroids[label]
+    # Build FT dataset (same shape as prior FTData but simplified)
+    class FTData:
+        def __init__(self, texts, labels, orig_embs, centroids):
+            self.texts = texts
+            self.labels = labels
+            self.orig_embs = orig_embs.astype(np.float32)
+            self.centroids = centroids
+        def __len__(self):
+            return len(self.texts)
+        def __getitem__(self, idx):
+            label = self.labels[idx]
+            # return numpy arrays for embeddings (collate will produce numpy arrays / tensors depending on DataLoader)
+            return self.texts[idx], int(label), self.orig_embs[idx], self.centroids[label]
 
-ft_dataset = FTData(fine_texts, fine_labels, orig_cls_all, centroids)
-from torch.utils.data import DataLoader
-ft_loader = DataLoader(ft_dataset, batch_size=FT_BATCH_SIZE, shuffle=False)
+    ft_dataset = FTData(fine_texts, fine_labels, orig_cls_all, centroids)
+    from torch.utils.data import DataLoader
+    ft_loader = DataLoader(ft_dataset, batch_size=FT_BATCH_SIZE, shuffle=False)
 
-# Student BERT + small classification head
-student_bert = BertModel.from_pretrained(BERT_MODEL_NAME).to(DEVICE)
-hidden_size = student_bert.config.hidden_size
-classifier_head = nn.Linear(hidden_size, num_classes).to(DEVICE)
+    # Student BERT + small classification head
+    student_bert = BertModel.from_pretrained(BERT_MODEL_NAME).to(DEVICE)
+    hidden_size = student_bert.config.hidden_size
+    classifier_head = nn.Linear(hidden_size, num_classes).to(DEVICE)
 
-mse_loss = nn.MSELoss()
-ce_loss_per_sample = nn.CrossEntropyLoss(reduction='none')  # we want per-sample losses to weight them
-optimizer = torch.optim.AdamW(list(student_bert.parameters()) + list(classifier_head.parameters()), lr=LR)
+    mse_loss = nn.MSELoss()
+    ce_loss_per_sample = nn.CrossEntropyLoss(reduction='none')  # we want per-sample losses to weight them
+    optimizer = torch.optim.AdamW(list(student_bert.parameters()) + list(classifier_head.parameters()), lr=LR)
 
-print("  Fine-tune loop (anchor + proto + classification + RF-feedback)...")
-for epoch in range(EPOCHS):
-    student_bert.train()
-    running_loss = 0.0
-    steps = 0
-    for batch in tqdm(ft_loader, desc=f" FT Epoch {epoch+1}/{EPOCHS}", leave=False):
-        texts_b, labels_b, orig_emb_b, proto_emb_b = batch
-        # orig_emb_b and proto_emb_b are numpy arrays (batch_size, H)
-        # Compute RF teacher predictions for this batch using orig_emb_b (baseline CLS)
-        if isinstance(orig_emb_b, np.ndarray):
-            rf_preds = rf_teacher.predict(orig_emb_b)
-        else:
-            rf_preds = rf_teacher.predict(np.array(orig_emb_b))
-        rf_preds = np.array(rf_preds, dtype=int)
-        labels_np = np.array(labels_b, dtype=int)
+    print("  Fine-tune loop (anchor + proto + classification + RF-feedback)...")
+    for epoch in range(EPOCHS):
+        student_bert.train()
+        running_loss = 0.0
+        steps = 0
+        for batch in tqdm(ft_loader, desc=f" FT Epoch {epoch+1}/{EPOCHS}", leave=False):
+            texts_b, labels_b, orig_emb_b, proto_emb_b = batch
+            # orig_emb_b and proto_emb_b are numpy arrays (batch_size, H) or tensors depending on DataLoader collate.
+            # Convert to numpy for RF teacher prediction (rf_teacher expects numpy)
+            if isinstance(orig_emb_b, np.ndarray):
+                orig_for_rf = orig_emb_b
+            else:
+                try:
+                    orig_for_rf = orig_emb_b.cpu().numpy()
+                except Exception:
+                    orig_for_rf = np.array(orig_emb_b)
 
-        # mask whether RF was correct for each sample
-        rf_correct_mask = (rf_preds == labels_np)  # boolean array
+            # Compute RF teacher predictions for this batch using orig_emb_b (baseline CLS)
+            rf_preds = rf_teacher.predict(orig_for_rf)
+            rf_preds = np.array(rf_preds, dtype=int)
+            labels_np = np.array(labels_b, dtype=int)
 
-        # forward student
-        enc = tokenizer(list(texts_b), return_tensors='pt', truncation=True, max_length=BATCH_TOKEN_MAX_LEN, padding=True).to(DEVICE)
-        optimizer.zero_grad()
-        out = student_bert(**enc)
-        cls_emb = out.last_hidden_state[:, 0, :]  # (B, H)
-        cls_emb = cls_emb.to(DEVICE)
+            # mask whether RF was correct for each sample
+            rf_correct_mask = (rf_preds == labels_np)  # boolean array
 
-        # anchor & proto losses (MSE)
-        orig_emb_t = orig_emb_b.detach().clone().to(dtype=torch.float32, device=DEVICE)
-        proto_emb_t = proto_emb_b.detach().clone().to(dtype=torch.float32, device=DEVICE)
+            # forward student
+            enc = tokenizer(list(texts_b), return_tensors='pt', truncation=True, max_length=BATCH_TOKEN_MAX_LEN, padding=True).to(DEVICE)
+            optimizer.zero_grad()
+            out = student_bert(**enc)
+            cls_emb = out.last_hidden_state[:, 0, :]  # (B, H)
+            cls_emb = cls_emb.to(DEVICE)
 
-        loss_anchor = mse_loss(cls_emb, orig_emb_t)
-        loss_proto = mse_loss(cls_emb, proto_emb_t)
+            # anchor & proto losses (MSE)
+            # convert orig_emb_b / proto_emb_b to torch tensors safely
+            if isinstance(orig_emb_b, np.ndarray):
+                orig_emb_t = torch.from_numpy(orig_emb_b).to(dtype=torch.float32, device=DEVICE)
+            else:
+                orig_emb_t = orig_emb_b.to(dtype=torch.float32, device=DEVICE)
 
-        # classification head + CE to true labels
-        logits = classifier_head(cls_emb)  # (B, C)
-        labels_t = torch.tensor(labels_np, dtype=torch.long, device=DEVICE)
-        loss_cls_vec = ce_loss_per_sample(logits, labels_t)  # per-sample loss
+            if isinstance(proto_emb_b, np.ndarray):
+                proto_emb_t = torch.from_numpy(proto_emb_b).to(dtype=torch.float32, device=DEVICE)
+            else:
+                proto_emb_t = proto_emb_b.to(dtype=torch.float32, device=DEVICE)
 
-        # RF-alignment loss: per-sample CE to rf_pred, signed by correctness (+1 if rf_correct else -1)
-        rf_pred_t = torch.tensor(rf_preds, dtype=torch.long, device=DEVICE)
-        loss_rf_vec = ce_loss_per_sample(logits, rf_pred_t)  # per-sample
-        signs = torch.where(rf_pred_t == labels_t, 1.0, -1.0).to(DEVICE)  # +1 if RF correct, -1 if RF wrong
-        # combine per-sample RF losses with signs, and average
-        loss_rf = (loss_rf_vec * signs).mean()
+            loss_anchor = mse_loss(cls_emb, orig_emb_t)
+            loss_proto = mse_loss(cls_emb, proto_emb_t)
 
-        # total loss
-        loss = (LAMBDA_ANCHOR * loss_anchor +
-                LAMBDA_PROTO * loss_proto +
-                LAMBDA_CLS * loss_cls_vec.mean() +
-                LAMBDA_RF  * loss_rf)
-        loss.backward()
-        optimizer.step()
+            # classification head + CE to true labels
+            logits = classifier_head(cls_emb)  # (B, C)
+            labels_t = torch.tensor(labels_np, dtype=torch.long, device=DEVICE)
+            loss_cls_vec = ce_loss_per_sample(logits, labels_t)  # per-sample loss
 
-        running_loss += loss.item()
-        steps += 1
+            # RF-alignment loss: per-sample CE to rf_pred, signed by correctness (+1 if rf_correct else -1)
+            rf_pred_t = torch.tensor(rf_preds, dtype=torch.long, device=DEVICE)
+            loss_rf_vec = ce_loss_per_sample(logits, rf_pred_t)  # per-sample
+            signs = torch.where(rf_pred_t == labels_t, 1.0, -1.0).to(DEVICE)  # +1 if RF correct, -1 if RF wrong
+            # combine per-sample RF losses with signs, and average
+            loss_rf = (loss_rf_vec * signs).mean()
 
-    avg_loss = running_loss / max(1, steps)
-    print(f"   Epoch {epoch+1}/{EPOCHS} - avg loss: {avg_loss:.6f} (anchor {loss_anchor.item():.6f}, proto {loss_proto.item():.6f}, cls {loss_cls_vec.mean().item():.6f}, rf {loss_rf.item():.6f})")
+            # total loss
+            loss = (LAMBDA_ANCHOR * loss_anchor +
+                    LAMBDA_PROTO * loss_proto +
+                    LAMBDA_CLS * loss_cls_vec.mean() +
+                    LAMBDA_RF  * loss_rf)
+            loss.backward()
+            optimizer.step()
 
-print("  Finished finetuning student. Saving finetuned embeddings (.ft) per device...")
+            running_loss += loss.item()
+            steps += 1
 
-# Save student embeddings (full devices) with suffix .ft
-for device in device_list:
-    compute_and_cache_embeddings_stream_for_model(device, student_bert, suffix=".ft", batch_size=EMBED_BATCH_SIZE)
+        avg_loss = running_loss / max(1, steps)
+        la = loss_anchor.item() if isinstance(loss_anchor, torch.Tensor) else float(loss_anchor)
+        lp = loss_proto.item() if isinstance(loss_proto, torch.Tensor) else float(loss_proto)
+        lc = loss_cls_vec.mean().item() if isinstance(loss_cls_vec, torch.Tensor) else float(loss_cls_vec.mean())
+        lrf = loss_rf.item() if isinstance(loss_rf, torch.Tensor) else float(loss_rf)
+        print(f"   Epoch {epoch+1}/{EPOCHS} - avg loss: {avg_loss:.6f} (anchor {la:.6f}, proto {lp:.6f}, cls {lc:.6f}, rf {lrf:.6f})")
 
-print("  Finetuned embeddings saved.")
+    print("  Finished finetuning student. Saving finetuned embeddings (.ft) per device...")
+
+    # Save student embeddings (full devices) with suffix .ft
+    for device in device_list:
+        compute_and_cache_embeddings_stream_for_model(device, student_bert, suffix=".ft", batch_size=EMBED_BATCH_SIZE)
+
+    print("  Finetuned embeddings saved.")
+else:
+    # skip finetune: student_bert remains None; later code will only load existing .ft.npy files
+    student_bert = None
 
 # ---------------- Now proceed to RF sweep TRAINING/EVALUATION using both baseline and finetuned embeddings ----------------
-# Note: for fairness we will sweep RF_TRAIN_PCT from 20%..70% in steps of 2% (START_PCT..END_PCT)
+# Note: for fairness we will sweep RF_TRAIN_PCT from START_PCT..END_PCT in steps of STEP_PCT (e.g. 20%..70%)
 results_baseline = []
 results_finetuned = []
 cm_baseline_records = []
 cm_finetuned_records = []
+classes = [d.replace('.json', '') for d in device_list]
 
 rf_train_pcts = np.arange(START_PCT, END_PCT + 1e-9, STEP_PCT)
 for pct in rf_train_pcts:
     RF_TRAIN_PCT = float(pct)
     print("------------------------------------------------------------")
     print(f"Running sweep step: RF_TRAIN_PCT = {RF_TRAIN_PCT*100:.1f}% (RF-val fixed at last {RF_VAL_PCT*100:.1f}%)")
-    # build per-device index lists: train = first RF_TRAIN_PCT of file? (But we must ensure no overlap w/ last 30%)
+    # build per-device index lists: train = SLICE between first FINE_PCT and RF_TRAIN_PCT
     per_device_train_emb_idxs = {}
     per_device_val_emb_idxs = {}
     total_train = 0
@@ -596,16 +660,46 @@ for pct in rf_train_pcts:
         total_lines = per_device_total_lines[device]
         rf_val_count = int(total_lines * RF_VAL_PCT)
         rf_val_count = max(1, rf_val_count)
-        rf_train_count = int(total_lines * RF_TRAIN_PCT)
-        rf_train_count = max(1, rf_train_count)
-        if rf_train_count + rf_val_count > total_lines:
-            rf_train_count = max(1, total_lines - rf_val_count)
-        train_idxs = list(range(0, rf_train_count))
+
+        # compute the fine block (first FINE_PCT)
+        fine_end_idx = int(total_lines * FINE_PCT)
+        fine_end_idx = min(fine_end_idx, total_lines - rf_val_count)
+        if fine_end_idx < 0:
+            fine_end_idx = 0
+
+        # compute rf_train slice: from fine_end_idx up to RF_TRAIN_PCT * total_lines
+        rf_train_start_idx = fine_end_idx
+        rf_train_end_idx = int(total_lines * RF_TRAIN_PCT)
+        rf_train_end_idx = min(rf_train_end_idx, total_lines - rf_val_count)
+        if rf_train_end_idx <= rf_train_start_idx:
+            train_idxs = []
+        else:
+            train_idxs = list(range(rf_train_start_idx, rf_train_end_idx))
+
+        # validation (last rf_val_count lines)
         val_idxs = list(range(total_lines - rf_val_count, total_lines))
+
         per_device_train_emb_idxs[device] = train_idxs
         per_device_val_emb_idxs[device] = val_idxs
         total_train += len(train_idxs)
         total_val += len(val_idxs)
+
+        # optional printing with samples
+        if PRINT_SAMPLE_LINES:
+            lines = per_device_lines[device]
+            t_first = short(lines[train_idxs[0]]) if train_idxs else "<none>"
+            t_last = short(lines[train_idxs[-1]]) if train_idxs else "<none>"
+            v_first = short(lines[val_idxs[0]]) if val_idxs else "<none>"
+            v_last = short(lines[val_idxs[-1]]) if val_idxs else "<none>"
+            fine_first = short(lines[0]) if fine_end_idx > 0 else "<none>"
+            fine_last = short(lines[fine_end_idx-1]) if fine_end_idx > 0 else "<none>"
+            print(f"  {device}: total={total_lines}, fine 1-based=(1,{fine_end_idx}) count={fine_end_idx}, train 1-based=({rf_train_start_idx+1},{rf_train_end_idx}) count={len(train_idxs)}, val 1-based=({total_lines-len(val_idxs)+1},{total_lines}) count={len(val_idxs)}")
+            if fine_end_idx > 0:
+                print(f"    fine sample first/last: {fine_first} / {fine_last}")
+            if train_idxs:
+                print(f"    train sample first/last: {t_first} / {t_last}")
+            if val_idxs:
+                print(f"    val   sample first/last: {v_first} / {v_last}")
 
     print(f"  Combined totals before interleave: n_train={total_train}, n_val={total_val}")
 
@@ -630,7 +724,7 @@ for pct in rf_train_pcts:
         X_train = np.vstack(train_emb_list).astype(np.float32)
         y_train = np.array(train_labels, dtype=int)
         X_val = np.vstack(val_emb_list).astype(np.float32) if len(val_emb_list) > 0 else np.zeros((0, X_train.shape[1]), dtype=np.float32)
-        y_val = np.array(val_labels, dtype=int) if len(val_labels) > 0 else np.array([], dtype=int)
+        y_val = np.array(val_labels, dtype=int) if len(val_emb_list) > 0 else np.array([], dtype=int)
 
         print(f"  Baseline combined totals after interleave: n_train={X_train.shape[0]}, n_val={X_val.shape[0]}")
         rf = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, n_jobs=RF_N_JOBS, random_state=42)
@@ -643,7 +737,6 @@ for pct in rf_train_pcts:
             print(f"  -> Baseline Macro F1 at RF_TRAIN_PCT={RF_TRAIN_PCT*100:.1f}%: {f1m:.4f}")
             cm = confusion_matrix(y_val, y_pred, labels=list(range(len(device_list))))
             cm_norm = normalize_cm_rows(cm)
-            classes = [d.replace('.json', '') for d in device_list]
             out_base = os.path.join(CM_BASELINE_DIR, f"confusion_baseline_RFtrain_{int(RF_TRAIN_PCT*100):02d}pct")
             title_text = f"Baseline RF Train {RF_TRAIN_PCT*100:.1f}% — Macro F1: {f1m:.4f}"
             saved = save_confusion_matrix_images(cm_norm, classes, out_base, title_text)
@@ -656,7 +749,12 @@ for pct in rf_train_pcts:
     for device in device_list:
         emb_arr_ft = load_embeddings_memmap_for_device(device, suffix=".ft")
         if emb_arr_ft is None:
-            # compute if missing
+            # compute if missing (student_bert should exist if we ran finetune; otherwise this will create student_bert temporarily)
+            if student_bert is None:
+                # create a fresh student model (same architecture) to compute embeddings if some .ft are unexpectedly missing.
+                # This branch is unlikely when REUSE_FINETUNE_EMBS_IF_PRESENT=True and all .ft exist.
+                print(f"  Warning: finetuned embeddings missing for {device} and no student available; instantiating a fresh student (unfinetuned) to compute .ft for missing device.")
+                student_bert = BertModel.from_pretrained(BERT_MODEL_NAME).to(DEVICE)
             emb_arr_ft = compute_and_cache_embeddings_stream_for_model(device, student_bert, suffix=".ft", batch_size=EMBED_BATCH_SIZE)
         t_idxs = per_device_train_emb_idxs[device]
         v_idxs = per_device_val_emb_idxs[device]
@@ -672,7 +770,7 @@ for pct in rf_train_pcts:
         X_train_ft = np.vstack(train_emb_list_ft).astype(np.float32)
         y_train_ft = np.array(train_labels_ft, dtype=int)
         X_val_ft = np.vstack(val_emb_list_ft).astype(np.float32) if len(val_emb_list_ft) > 0 else np.zeros((0, X_train_ft.shape[1]), dtype=np.float32)
-        y_val_ft = np.array(val_labels_ft, dtype=int) if len(val_labels_ft) > 0 else np.array([], dtype=int)
+        y_val_ft = np.array(val_labels_ft, dtype=int) if len(val_emb_list_ft) > 0 else np.array([], dtype=int)
 
         print(f"  Finetuned combined totals after interleave: n_train={X_train_ft.shape[0]}, n_val={X_val_ft.shape[0]}")
         rf_ft = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, n_jobs=RF_N_JOBS, random_state=42)
