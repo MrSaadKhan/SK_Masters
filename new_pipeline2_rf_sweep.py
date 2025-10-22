@@ -104,7 +104,7 @@ os.makedirs(CM_FINETUNED_DIR, exist_ok=True)
 
 # Misc / performance
 BATCH_TOKEN_MAX_LEN = 512
-EMBED_BATCH_SIZE = 64
+EMBED_BATCH_SIZE = 32
 PRINT_SAMPLE_LINES = True
 
 # ---------------- Helpers ----------------
