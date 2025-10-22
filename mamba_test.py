@@ -12,8 +12,8 @@ from transformers import AutoTokenizer, AutoModel, AutoConfig, AutoModelForCausa
 #   • `mamba-130m-hf` → hidden_size = 768
 #   • `mamba-370m-hf` → hidden_size = 1024
 # ------------------------------------------------------------------
-# MODEL_NAME = "state-spaces/mamba-130m-hf"
-MODEL_NAME = "google-bert/bert-base-uncased"
+MODEL_NAME = "state-spaces/mamba-130m-hf"
+# MODEL_NAME = "google-bert/bert-base-uncased"
 MAX_TOKENS  = 512          # truncate / pad to this many tokens
 
 def get_sentence_embedding(sentence: str, tokenizer, model, model_name: str = MODEL_NAME) -> torch.Tensor:

@@ -18,7 +18,7 @@ import numpy as np
 from tqdm import tqdm
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix, f1_score
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, AutoConfig, AutoModelForCausalLM
 import torch
 import torch.nn as nn
 import sys
@@ -52,6 +52,9 @@ INPUT_FOLDER = "preprocessed_data_group_merged/ungrouped"
 # MODEL_NAME = "bert-base-uncased"
 # Example: MODEL_NAME = "state-spaces/mamba-130m-hf"
 MODEL_NAME = "state-spaces/mamba-130m-hf"
+
+# Detect Mamba-like model (minimal rule)
+IS_MAMBA = ("mamba" in MODEL_NAME.lower()) or MODEL_NAME.startswith("state-spaces/mamba")
 
 # ----- New flag: enable/disable finetuning entirely -----
 # If True: perform finetuning (or reuse .ft if REUSE_FINETUNE_EMBS_IF_PRESENT allows).
@@ -101,7 +104,7 @@ os.makedirs(CM_FINETUNED_DIR, exist_ok=True)
 
 # Misc / performance
 BATCH_TOKEN_MAX_LEN = 512
-EMBED_BATCH_SIZE = 32
+EMBED_BATCH_SIZE = 64
 PRINT_SAMPLE_LINES = True
 
 # ---------------- Helpers ----------------
@@ -125,19 +128,37 @@ def load_nonempty_lines(file_path):
                 lines.append(s)
     return lines
 
+# ---- New helper: unified batched embedding extraction (returns torch.Tensor on DEVICE) ----
+def model_batch_embeddings_torch(batch_texts, tokenizer, model, max_length=BATCH_TOKEN_MAX_LEN):
+    """
+    Returns torch.Tensor shape (B, H) on DEVICE.
+    For Mamba: mean-pool last hidden state across non-padding tokens (attention mask).
+    For BERT-like encoder models: return CLS token last_hidden_state[:,0,:].
+    """
+    enc = tokenizer(batch_texts, return_tensors='pt', truncation=True, max_length=max_length, padding=True)
+    enc = {k: v.to(DEVICE) for k, v in enc.items()}
+    with torch.no_grad():
+        # ensure hidden states are returned by model (we set cfg.output_hidden_states during load)
+        out = model(**enc)
+    if IS_MAMBA:
+        # outputs.hidden_states[-1] shape: (B, seq_len, hidden)
+        last_hidden = out.hidden_states[-1]  # (B, seq_len, hidden)
+        mask = enc["attention_mask"].unsqueeze(-1)  # (B, seq_len, 1)
+        summed = (last_hidden * mask).sum(dim=1)  # (B, hidden)
+        counts = mask.sum(dim=1).clamp(min=1)  # (B, 1) avoid div by zero
+        emb = summed / counts  # (B, hidden)
+    else:
+        # encoder-style CLS token
+        emb = out.last_hidden_state[:, 0, :]  # (B, hidden)
+    return emb  # torch tensor on DEVICE
+
 def get_embedding_batch(sentences, tokenizer, model, max_length=512):
     """
     Compute embeddings for a list of sentences in one forward pass (batched).
     Returns numpy array shape (len(sentences), hidden_size).
     """
-    model.eval()
-    with torch.no_grad():
-        enc = tokenizer(sentences, return_tensors='pt', truncation=True,
-                        max_length=max_length, padding=True).to(DEVICE)
-        out = model(**enc)
-        # assume model returns last_hidden_state (most encoder models do)
-        cls = out.last_hidden_state[:, 0, :].cpu().numpy()
-    return cls  # shape (B, H)
+    emb_t = model_batch_embeddings_torch(sentences, tokenizer, model, max_length=max_length)
+    return emb_t.cpu().numpy()
 
 def interleave_round_robin(per_device_lists, devices_order, device_label_map):
     pointers = {d: 0 for d in devices_order}
@@ -158,7 +179,15 @@ def interleave_round_robin(per_device_lists, devices_order, device_label_map):
 # ---------------- Prepare environment (model/tokenizer) ----------------
 print("Loading tokenizer and model (this may take a moment)...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
-base_model = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE)
+cfg = AutoConfig.from_pretrained(MODEL_NAME)
+cfg.output_hidden_states = True  # ensure hidden states are returned
+
+# Minimal branching for Mamba vs encoder models:
+if IS_MAMBA:
+    # follow the first script's pattern: causal-lm model class + float16 dtype
+    base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, config=cfg, torch_dtype=torch.float16).to(DEVICE)
+else:
+    base_model = AutoModel.from_pretrained(MODEL_NAME, config=cfg).to(DEVICE)
 base_model.eval()
 
 device_label_map = {dev: idx for idx, dev in enumerate(device_list)}
@@ -212,6 +241,7 @@ from numpy.lib.format import open_memmap
 def compute_and_cache_embeddings_stream(device, batch_size=EMBED_BATCH_SIZE):
     """
     Compute baseline embeddings (base_model) streaming and save .npy/.txt
+    Uses unified model_batch_embeddings_torch helper (so Mamba vs BERT handled).
     """
     safe_name = device.replace('.json', '')
     lines = per_device_lines[device]
@@ -273,6 +303,7 @@ def compute_and_cache_embeddings_stream(device, batch_size=EMBED_BATCH_SIZE):
 def compute_and_cache_embeddings_stream_for_model(device, model, suffix=".ft", batch_size=EMBED_BATCH_SIZE):
     """
     Compute embeddings with a given model (e.g., student) and save .npy/.txt with suffix.
+    Uses unified helper to ensure Mamba vs BERT consistency.
     """
     safe_name = device.replace('.json', '')
     lines = per_device_lines[device]
@@ -317,9 +348,8 @@ def compute_and_cache_embeddings_stream_for_model(device, model, suffix=".ft", b
         idx = 0
         for start in tqdm(range(0, n, batch_size), desc=f"Embedding (stream){suffix} {safe_name}"):
             batch_texts = lines[start:start+batch_size]
-            enc = tokenizer(batch_texts, return_tensors='pt', truncation=True, max_length=BATCH_TOKEN_MAX_LEN, padding=True).to(DEVICE)
-            out = model(**enc)
-            batch_embs = out.last_hidden_state[:, 0, :].cpu().numpy()
+            emb_t = model_batch_embeddings_torch(batch_texts, tokenizer, model, max_length=BATCH_TOKEN_MAX_LEN)
+            batch_embs = emb_t.cpu().numpy()
             B = batch_embs.shape[0]
             for b in range(B):
                 row = batch_embs[b].astype(np.float32)
@@ -518,15 +548,12 @@ def main():
     student_model = None
     if not skip_finetune:
         print("\nStarting single student fine-tune using first-FINE_PCT interleaved examples (with RF feedback)...")
-        # Prepare orig anchors and prototypes (orig CLS over fine_texts) using base_model
+        # Prepare orig anchors and prototypes (orig embeddings over fine_texts) using base_model
         orig_cls_parts = []
         for i in range(0, len(fine_texts), FT_BATCH_SIZE):
             batch = fine_texts[i:i+FT_BATCH_SIZE]
-            enc = tokenizer(batch, return_tensors='pt', truncation=True, max_length=BATCH_TOKEN_MAX_LEN, padding=True).to(DEVICE)
-            with torch.no_grad():
-                out = base_model(**enc)
-                cls = out.last_hidden_state[:, 0, :].cpu().numpy()
-            orig_cls_parts.append(cls)
+            emb_t = model_batch_embeddings_torch(batch, tokenizer, base_model, max_length=BATCH_TOKEN_MAX_LEN)
+            orig_cls_parts.append(emb_t.cpu().numpy())
         orig_cls_all = np.vstack(orig_cls_parts)
         labels_arr = np.array(fine_labels, dtype=int)
 
@@ -554,7 +581,12 @@ def main():
         ft_loader = DataLoader(ft_dataset, batch_size=FT_BATCH_SIZE, shuffle=False)
 
         # Student model + small classification head
-        student_model = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE)
+        # For Mamba use AutoModelForCausalLM (same class as base_model); for encoder models use AutoModel
+        if IS_MAMBA:
+            student_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, config=cfg, torch_dtype=torch.float16).to(DEVICE)
+        else:
+            student_model = AutoModel.from_pretrained(MODEL_NAME, config=cfg).to(DEVICE)
+
         hidden_size = student_model.config.hidden_size
         classifier_head = nn.Linear(hidden_size, num_classes).to(DEVICE)
 
@@ -582,10 +614,9 @@ def main():
                 rf_preds = np.array(rf_preds, dtype=int)
                 labels_np = np.array(labels_b, dtype=int)
 
-                enc = tokenizer(list(texts_b), return_tensors='pt', truncation=True, max_length=BATCH_TOKEN_MAX_LEN, padding=True).to(DEVICE)
-                optimizer.zero_grad()
-                out = student_model(**enc)
-                cls_emb = out.last_hidden_state[:, 0, :]
+                # Use unified helper to compute student embeddings (so Mamba/BERT consistent)
+                enc_texts = list(texts_b)
+                cls_emb = model_batch_embeddings_torch(enc_texts, tokenizer, student_model, max_length=BATCH_TOKEN_MAX_LEN)
                 cls_emb = cls_emb.to(DEVICE)
 
                 if isinstance(orig_emb_b, np.ndarray):
@@ -614,6 +645,7 @@ def main():
                         LAMBDA_PROTO * loss_proto +
                         LAMBDA_CLS * loss_cls_vec.mean() +
                         LAMBDA_RF  * loss_rf)
+                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
@@ -744,7 +776,10 @@ def main():
                 if emb_arr_ft is None:
                     if student_model is None:
                         # fallback: create an unfinetuned student model to compute embeddings
-                        student_model = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE)
+                        if IS_MAMBA:
+                            student_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, config=cfg, torch_dtype=torch.float16).to(DEVICE)
+                        else:
+                            student_model = AutoModel.from_pretrained(MODEL_NAME, config=cfg).to(DEVICE)
                     emb_arr_ft = compute_and_cache_embeddings_stream_for_model(device, student_model, suffix=".ft", batch_size=EMBED_BATCH_SIZE)
                 t_idxs = per_device_train_emb_idxs[device]
                 v_idxs = per_device_val_emb_idxs[device]
