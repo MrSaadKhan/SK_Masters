@@ -7,6 +7,7 @@ Same as before but minimal edits so the script works for both BERT and other HF 
 Minimal changes:
  - Use AutoTokenizer / AutoModel and a generic MODEL_NAME variable
  - Replace references to `bert_model` with `base_model`
+ - Added FINETUNE_ENABLED flag to enable/disable finetuning
 Everything else is unchanged from the previous version, except that execution is placed
 inside `main()` and wrapped by a try/except that emails success/failure via `special`.
 """
@@ -51,6 +52,13 @@ INPUT_FOLDER = "preprocessed_data_group_merged/ungrouped"
 # MODEL_NAME = "bert-base-uncased"
 # Example: MODEL_NAME = "state-spaces/mamba-130m-hf"
 MODEL_NAME = "state-spaces/mamba-130m-hf"
+
+# ----- New flag: enable/disable finetuning entirely -----
+# If True: perform finetuning (or reuse .ft if REUSE_FINETUNE_EMBS_IF_PRESENT allows).
+# If False: skip finetuning and skip finetuned evaluation (only baseline results).
+FINETUNE_ENABLED = False
+# --------------------------------------------------------
+
 # Sweep settings
 START_PCT = 0.20   # final RF sweep will iterate RF train from 20% to 70%
 END_PCT = 0.70
@@ -58,7 +66,7 @@ STEP_PCT = 0.02
 RF_VAL_PCT = 0.30   # fixed: reserve last 30% per device for validation
 
 # Fine-tune specification
-FINE_PCT = 0.01     # first 20% per device used for fine-tuning (single student)
+FINE_PCT = 0.01     # first chunk per device used for fine-tuning (single student)
 
 # If True: and valid finetuned embeddings (.ft.npy) exist for *all* devices, skip finetuning.
 # If False: always (re)run finetuning and overwrite .ft embeddings.
@@ -491,15 +499,20 @@ def main():
 
     # ---------------- Decide whether to finetune or reuse existing finetuned embeddings ----------------
     skip_finetune = False
-    if REUSE_FINETUNE_EMBS_IF_PRESENT:
-        ok = all_finetuned_embeddings_exist(device_list, suffix=".ft")
-        if ok:
-            print("\nAll finetuned embeddings (.ft.npy) already exist and REUSE_FINETUNE_EMBS_IF_PRESENT=True -> skipping finetuning.")
-            skip_finetune = True
-        else:
-            print("\nFinetuned embeddings not present for all devices (or invalid); will perform finetuning and write .ft embeddings.")
+
+    if not FINETUNE_ENABLED:
+        print("\nFINETUNE_ENABLED is False -> skipping finetuning and finetuned evaluation.")
+        skip_finetune = True
     else:
-        print("\nREUSE_FINETUNE_EMBS_IF_PRESENT=False -> (re)running finetuning regardless of existing .ft files.")
+        if REUSE_FINETUNE_EMBS_IF_PRESENT:
+            ok = all_finetuned_embeddings_exist(device_list, suffix=".ft")
+            if ok:
+                print("\nAll finetuned embeddings (.ft.npy) already exist and REUSE_FINETUNE_EMBS_IF_PRESENT=True -> skipping finetuning.")
+                skip_finetune = True
+            else:
+                print("\nFinetuned embeddings not present for all devices (or invalid); will perform finetuning and write .ft embeddings.")
+        else:
+            print("\nREUSE_FINETUNE_EMBS_IF_PRESENT=False -> (re)running finetuning regardless of existing .ft files.")
 
     # ---------------- STUDENT FINETUNE (single student trained once using fine_texts) ----------------
     student_model = None
@@ -621,7 +634,7 @@ def main():
 
         print("  Finetuned embeddings saved.")
     else:
-        print("\nSkipping finetuning - will use existing .ft embeddings (if present).")
+        print("\nSkipping finetuning - will use existing .ft embeddings (if present) or skip finetuned evaluation entirely.")
 
     # ---------------- RF sweep training/eval using baseline and finetuned embeddings ----------------
     results_baseline = []
@@ -722,48 +735,51 @@ def main():
                 cm_baseline_records.append({"pct": RF_TRAIN_PCT, "macro_f1": float(f1m), "n_train": int(X_train.shape[0]), "n_val": int(X_val.shape[0]), "img_png": saved.get("png"), "cm": cm_norm})
                 results_baseline.append({"rf_train_pct": RF_TRAIN_PCT, "macro_f1": float(f1m), "n_train": int(X_train.shape[0]), "n_val": int(X_val.shape[0])})
 
-        # Finetuned
-        per_device_train_lists_ft = {}
-        per_device_val_lists_ft = {}
-        for device in device_list:
-            emb_arr_ft = load_embeddings_memmap_for_device(device, suffix=".ft")
-            if emb_arr_ft is None:
-                if student_model is None:
-                    # fallback: create an unfinetuned student model to compute embeddings
-                    student_model = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE)
-                emb_arr_ft = compute_and_cache_embeddings_stream_for_model(device, student_model, suffix=".ft", batch_size=EMBED_BATCH_SIZE)
-            t_idxs = per_device_train_emb_idxs[device]
-            v_idxs = per_device_val_emb_idxs[device]
-            per_device_train_lists_ft[device] = [np.array(emb_arr_ft[i], dtype=np.float32) for i in t_idxs] if len(t_idxs) > 0 else []
-            per_device_val_lists_ft[device]   = [np.array(emb_arr_ft[i], dtype=np.float32) for i in v_idxs] if len(v_idxs) > 0 else []
+        # Finetuned (only if FINETUNE_ENABLED)
+        if FINETUNE_ENABLED:
+            per_device_train_lists_ft = {}
+            per_device_val_lists_ft = {}
+            for device in device_list:
+                emb_arr_ft = load_embeddings_memmap_for_device(device, suffix=".ft")
+                if emb_arr_ft is None:
+                    if student_model is None:
+                        # fallback: create an unfinetuned student model to compute embeddings
+                        student_model = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE)
+                    emb_arr_ft = compute_and_cache_embeddings_stream_for_model(device, student_model, suffix=".ft", batch_size=EMBED_BATCH_SIZE)
+                t_idxs = per_device_train_emb_idxs[device]
+                v_idxs = per_device_val_emb_idxs[device]
+                per_device_train_lists_ft[device] = [np.array(emb_arr_ft[i], dtype=np.float32) for i in t_idxs] if len(t_idxs) > 0 else []
+                per_device_val_lists_ft[device]   = [np.array(emb_arr_ft[i], dtype=np.float32) for i in v_idxs] if len(v_idxs) > 0 else []
 
-        train_emb_list_ft, train_labels_ft = interleave_round_robin(per_device_train_lists_ft, device_list, device_label_map)
-        val_emb_list_ft, val_labels_ft     = interleave_round_robin(per_device_val_lists_ft, device_list, device_label_map)
+            train_emb_list_ft, train_labels_ft = interleave_round_robin(per_device_train_lists_ft, device_list, device_label_map)
+            val_emb_list_ft, val_labels_ft     = interleave_round_robin(per_device_val_lists_ft, device_list, device_label_map)
 
-        if len(train_emb_list_ft) == 0:
-            print("  No finetuned training samples available for this pct; skipping finetuned RF.")
-        else:
-            X_train_ft = np.vstack(train_emb_list_ft).astype(np.float32)
-            y_train_ft = np.array(train_labels_ft, dtype=int)
-            X_val_ft = np.vstack(val_emb_list_ft).astype(np.float32) if len(val_emb_list_ft) > 0 else np.zeros((0, X_train_ft.shape[1]), dtype=np.float32)
-            y_val_ft = np.array(val_labels_ft, dtype=int) if len(val_emb_list_ft) > 0 else np.array([], dtype=int)
-
-            print(f"  Finetuned combined totals after interleave: n_train={X_train_ft.shape[0]}, n_val={X_val_ft.shape[0]}")
-            rf_ft = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, n_jobs=RF_N_JOBS, random_state=42)
-            rf_ft.fit(X_train_ft, y_train_ft)
-            if X_val_ft.shape[0] == 0:
-                print("  No finetuned validation samples; skipping finetuned eval.")
+            if len(train_emb_list_ft) == 0:
+                print("  No finetuned training samples available for this pct; skipping finetuned RF.")
             else:
-                y_pred_ft = rf_ft.predict(X_val_ft)
-                f1m_ft = f1_score(y_val_ft, y_pred_ft, average='macro')
-                print(f"  -> Finetuned Macro F1 at RF_TRAIN_PCT={RF_TRAIN_PCT*100:.1f}%: {f1m_ft:.4f}")
-                cm_ft = confusion_matrix(y_val_ft, y_pred_ft, labels=list(range(len(device_list))))
-                cm_ft_norm = normalize_cm_rows(cm_ft)
-                out_base_ft = os.path.join(CM_FINETUNED_DIR, f"confusion_finetuned_RFtrain_{int(RF_TRAIN_PCT*100):02d}pct")
-                title_text_ft = f"Finetuned RF Train {RF_TRAIN_PCT*100:.1f}% — Macro F1: {f1m_ft:.4f}"
-                saved_ft = save_confusion_matrix_images(cm_ft_norm, classes, out_base_ft, title_text_ft)
-                cm_finetuned_records.append({"pct": RF_TRAIN_PCT, "macro_f1": float(f1m_ft), "n_train": int(X_train_ft.shape[0]), "n_val": int(X_val_ft.shape[0]), "img_png": saved_ft.get("png"), "cm": cm_ft_norm})
-                results_finetuned.append({"rf_train_pct": RF_TRAIN_PCT, "macro_f1": float(f1m_ft), "n_train": int(X_train_ft.shape[0]), "n_val": int(X_val_ft.shape[0])})
+                X_train_ft = np.vstack(train_emb_list_ft).astype(np.float32)
+                y_train_ft = np.array(train_labels_ft, dtype=int)
+                X_val_ft = np.vstack(val_emb_list_ft).astype(np.float32) if len(val_emb_list_ft) > 0 else np.zeros((0, X_train_ft.shape[1]), dtype=np.float32)
+                y_val_ft = np.array(val_labels_ft, dtype=int) if len(val_emb_list_ft) > 0 else np.array([], dtype=int)
+
+                print(f"  Finetuned combined totals after interleave: n_train={X_train_ft.shape[0]}, n_val={X_val_ft.shape[0]}")
+                rf_ft = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, n_jobs=RF_N_JOBS, random_state=42)
+                rf_ft.fit(X_train_ft, y_train_ft)
+                if X_val_ft.shape[0] == 0:
+                    print("  No finetuned validation samples; skipping finetuned eval.")
+                else:
+                    y_pred_ft = rf_ft.predict(X_val_ft)
+                    f1m_ft = f1_score(y_val_ft, y_pred_ft, average='macro')
+                    print(f"  -> Finetuned Macro F1 at RF_TRAIN_PCT={RF_TRAIN_PCT*100:.1f}%: {f1m_ft:.4f}")
+                    cm_ft = confusion_matrix(y_val_ft, y_pred_ft, labels=list(range(len(device_list))))
+                    cm_ft_norm = normalize_cm_rows(cm_ft)
+                    out_base_ft = os.path.join(CM_FINETUNED_DIR, f"confusion_finetuned_RFtrain_{int(RF_TRAIN_PCT*100):02d}pct")
+                    title_text_ft = f"Finetuned RF Train {RF_TRAIN_PCT*100:.1f}% — Macro F1: {f1m_ft:.4f}"
+                    saved_ft = save_confusion_matrix_images(cm_ft_norm, classes, out_base_ft, title_text_ft)
+                    cm_finetuned_records.append({"pct": RF_TRAIN_PCT, "macro_f1": float(f1m_ft), "n_train": int(X_train_ft.shape[0]), "n_val": int(X_val_ft.shape[0]), "img_png": saved_ft.get("png"), "cm": cm_ft_norm})
+                    results_finetuned.append({"rf_train_pct": RF_TRAIN_PCT, "macro_f1": float(f1m_ft), "n_train": int(X_train_ft.shape[0]), "n_val": int(X_val_ft.shape[0])})
+        else:
+            print("  Finetuned evaluation skipped (FINETUNE_ENABLED=False).")
 
     # ---------------- Save numeric results and plots ----------------
     def save_results_csv_and_plot(results_list, csv_name, plot_name):
@@ -796,10 +812,12 @@ def main():
         print(f"\nSaved baseline numeric results to: {base_csv}")
 
     ft_csv, ft_plot = None, None
-    if results_finetuned:
+    if FINETUNE_ENABLED and results_finetuned:
         ft_csv, ft_plot = save_results_csv_and_plot(results_finetuned, "rf_train_pct_results_finetuned.csv",
                                                     "Finetuned: RF training size vs Macro F1")
         print(f"\nSaved finetuned numeric results to: {ft_csv}")
+    elif not FINETUNE_ENABLED:
+        print("\nFinetuning disabled -> no finetuned results saved.")
 
     # ---------------- Create PPTX containing confusion matrices ----------------
     def create_pptx_from_records(records, out_pptx):
@@ -834,7 +852,7 @@ def main():
         pptx_base_path = os.path.join(CM_DIR, f"confusion_baseline_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.pptx")
         create_pptx_from_records(cm_baseline_records, pptx_base_path)
 
-    if cm_finetuned_records:
+    if FINETUNE_ENABLED and cm_finetuned_records:
         pptx_ft_path = os.path.join(CM_DIR, f"confusion_finetuned_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.pptx")
         create_pptx_from_records(cm_finetuned_records, pptx_ft_path)
 
@@ -843,24 +861,28 @@ def main():
         print(f"  - baseline CSV: {base_csv}")
     if base_plot:
         print(f"  - baseline plot: {base_plot}")
-    if ft_csv:
+    if FINETUNE_ENABLED and ft_csv:
         print(f"  - finetuned CSV: {ft_csv}")
-    if ft_plot:
+    if FINETUNE_ENABLED and ft_plot:
         print(f"  - finetuned plot: {ft_plot}")
     print(f"  - confusion matrices (baseline) in: {CM_BASELINE_DIR}")
-    print(f"  - confusion matrices (finetuned) in: {CM_FINETUNED_DIR}")
+    if FINETUNE_ENABLED:
+        print(f"  - confusion matrices (finetuned) in: {CM_FINETUNED_DIR}")
+    else:
+        print("  - finetuned outputs skipped (FINETUNE_ENABLED=False)")
     print(f"  - embedding files (per device) in folder: {EMB_DIR}")
 
     # Return a summary for the success email
     summary = {
         "baseline_csv": base_csv,
         "baseline_plot": base_plot,
-        "finetuned_csv": ft_csv,
-        "finetuned_plot": ft_plot,
+        "finetuned_csv": ft_csv if FINETUNE_ENABLED else None,
+        "finetuned_plot": ft_plot if FINETUNE_ENABLED else None,
         "pptx_baseline": pptx_base_path,
-        "pptx_finetuned": pptx_ft_path,
+        "pptx_finetuned": pptx_ft_path if FINETUNE_ENABLED else None,
         "n_baseline_results": len(results_baseline),
-        "n_finetuned_results": len(results_finetuned),
+        "n_finetuned_results": len(results_finetuned) if FINETUNE_ENABLED else 0,
+        "finetune_enabled": FINETUNE_ENABLED,
     }
     return summary
 
@@ -874,6 +896,7 @@ if __name__ == "__main__":
             "Your RF sweep + finetune script completed successfully.",
             "",
             f"Model: {MODEL_NAME}",
+            f"Finetune enabled: {summary.get('finetune_enabled', False)}",
             f"Baseline results points: {summary.get('n_baseline_results', 0)}",
             f"Finetuned results points: {summary.get('n_finetuned_results', 0)}",
             ""
