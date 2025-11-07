@@ -2,24 +2,7 @@
 """
 compute_token_stats_dual.py
 ───────────────────────────────────────────────────────────────────────────────
-Compute token counts for **two** models (e.g., Mamba and BERT) across **two** corpora,
-write per‑line & summary stats, then plot their CCDFs together (static + interactive).
-
-If `line_token_counts_<label>.txt` exists, the script reloads counts from it; otherwise it
-recomputes tokens. Stats (average, percentiles) are recalculated and `token_stats_<label>.txt`
-is always overwritten.
-
-All paths are set via variables below—no CLI args needed.
-
-Outputs land in `BASE_OUT_DIR/<model_slug>/`:
-  • line_token_counts_<label>.txt  ── per‑line counts
-  • token_stats_<label>.txt        ── summary statistics (includes avg, model name)
-  • ccdf_static.{svg,pdf,jpg}      ── 300 dpi static plot (both corpora)
-  • ccdf_interactive.html          ── interactive Plotly version
-
-Dependencies
-^^^^^^^^^^^^
-    pip install transformers tqdm numpy matplotlib plotly pandas
+(… docstring unchanged …)
 """
 
 from __future__ import annotations
@@ -38,15 +21,34 @@ import plotly.express as px
 
 # ───── CONFIGURATION ─────────────────────────────────────────────────────────
 DIRS: Dict[str, Path] = {
-    "group":  Path("/home/iotresearch/saad/masters/preprocessed_data_group/ungrouped"),
-    "single": Path("/home/iotresearch/saad/masters/preprocessed_data/ungrouped"),
+    "group":  Path("/home/iotresearch/saad/masters/preprocessed_data_group_merged/ungrouped"),
+    "single": Path("/home/iotresearch/saad/masters/preprocessed_data_single_merged/ungrouped"),
 }
-WORKERS = None                # None → use CPU count
+
+
+device_list = [
+    "irobot_roomba.json.txt",
+    "line_clova_wave.json.txt",
+    "nature_remo.json.txt",
+    "qrio_hub.json.txt",
+    "xiaomi_mijia_led.json.txt",
+    "powerelectric_wi-fi_plug.json.txt",
+    "planex_smacam_outdoor.json.txt"
+]
+
+# List specific items (filenames or subdirectory names) to process under each DIR
+# Leave empty to process everything as before.
+FILES_TO_PROCESS: Dict[str, List[str]] = {
+    "group":  device_list,       # example file names or folders
+    "single": device_list,  # example file names or folders
+}
+
+WORKERS = None
 MODELS = [
     "state-spaces/mamba-130m-hf",
     "google-bert/bert-base-uncased",
 ]
-BASE_OUT_DIR = Path.cwd() / "token_output"
+BASE_OUT_DIR = Path.cwd() / "token_output-specific"
 
 # ───── Worker Init ───────────────────────────────────────────────────────────
 _TOKENIZER = None
@@ -56,10 +58,9 @@ def _init_worker(model_name: str):
     _TOKENIZER = AutoTokenizer.from_pretrained(model_name)
     print(f"[Worker] Loaded tokenizer for model {model_name}")
 
-# ───── File Processing ────────────────────────────────────────────────────────
+# ───── File Processing ───────────────────────────────────────────────────────
 
 def _process_file(path: Path) -> List[int]:
-    """Return a list of token counts for every line in the file."""
     global _TOKENIZER
     counts: List[int] = []
     with path.open("r", encoding="utf-8", errors="ignore") as f:
@@ -69,12 +70,37 @@ def _process_file(path: Path) -> List[int]:
             counts.append(n_tok)
     return counts
 
-# ───── Corpus & Model Processing ──────────────────────────────────────────────
+# ───── Corpus & Model Processing ─────────────────────────────────────────────
 
 def collect_counts(label: str, root: Path, model_name: str, out_dir: Path) -> List[int]:
-    if not root.is_dir(): sys.exit(f"Directory not found: {root}")
-    txt_files = list(root.rglob("*.txt"))
-    if not txt_files: sys.exit(f"No .txt files found in {root}")
+    if not root.is_dir():
+        sys.exit(f"Directory not found: {root}")
+
+    # ← MODIFIED: restrict to files/subdirs listed in FILES_TO_PROCESS
+    items_to_process = FILES_TO_PROCESS.get(label, [])
+    if items_to_process:
+        selected_paths: List[Path] = []
+        print(f"\n[INFO] Looking in {root} for items in {items_to_process}")
+        for name in items_to_process:
+            candidate = root / name
+            print(f"[DEBUG] Checking {candidate}")
+            if candidate.is_file() and candidate.suffix == ".txt":
+                selected_paths.append(candidate)
+            elif candidate.is_dir():
+                found = list(candidate.rglob("*.txt"))
+                print(f"[DEBUG] Found {len(found)} .txt in {candidate}")
+                selected_paths.extend(found)
+            else:
+                print(f"[WARN] Skipping missing item: {candidate}")
+        txt_files = selected_paths
+        print(f"[INFO] Total files selected for '{label}': {len(txt_files)}")
+
+    else:
+        # Default: process all
+        txt_files = list(root.rglob("*.txt"))
+
+    if not txt_files:
+        sys.exit(f"No .txt files found for label '{label}' in {root}")
 
     model_slug = model_name.split('/')[-1]
     model_out = out_dir / model_slug
@@ -115,7 +141,7 @@ def collect_counts(label: str, root: Path, model_name: str, out_dir: Path) -> Li
         sf.write(f"Total lines            : {total}\n")
         sf.write(f"Average tokens/line    : {avg:.2f}\n")
         sf.write(f"Lines ≤512 tokens      : {np.sum(arr <= 512)} ({pct_512:.2f}th pct)\n")
-        sf.write(f"99th‑percentile tokens : {p99:.2f}\n")
+        sf.write(f"99th-percentile tokens : {p99:.2f}\n")
     return counts
 
 # ───── Plotting ─────────────────────────────────────────────────────────────

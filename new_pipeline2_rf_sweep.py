@@ -24,7 +24,7 @@ import torch.nn as nn
 import sys
 import matplotlib.pyplot as plt
 from datetime import datetime
-
+from zoneinfo import ZoneInfo
 # email & traceback imports for wrapper
 import traceback
 import special
@@ -56,10 +56,15 @@ MODEL_NAME = "state-spaces/mamba-130m-hf"
 # Detect Mamba-like model (minimal rule)
 IS_MAMBA = ("mamba" in MODEL_NAME.lower()) or MODEL_NAME.startswith("state-spaces/mamba")
 
+# Fraction of each device file to use (0.0 < DATA_USAGE_PCT <= 1.0)
+# Set to 0.5 to use the first 50% of each device's data.
+DATA_USAGE_PCT = 0.1  # default 1.0 (use everything); change to 0.5, 0.25, etc.
+
+
 # ----- New flag: enable/disable finetuning entirely -----
 # If True: perform finetuning (or reuse .ft if REUSE_FINETUNE_EMBS_IF_PRESENT allows).
 # If False: skip finetuning and skip finetuned evaluation (only baseline results).
-FINETUNE_ENABLED = False
+FINETUNE_ENABLED = True
 # --------------------------------------------------------
 
 # Sweep settings
@@ -68,8 +73,11 @@ END_PCT = 0.70
 STEP_PCT = 0.02
 RF_VAL_PCT = 0.30   # fixed: reserve last 30% per device for validation
 
-# Fine-tune specification
+# Fine-tune specification (legacy variable; reserved block is controlled by RESERVED_FINE_PCT)
 FINE_PCT = 0.01     # first chunk per device used for fine-tuning (single student)
+
+# Fixed reserved percent: always reserve the first 20% of each device (excluded from RF training)
+RESERVED_FINE_PCT = 0.20
 
 # If True: and valid finetuned embeddings (.ft.npy) exist for *all* devices, skip finetuning.
 # If False: always (re)run finetuning and overwrite .ft embeddings.
@@ -82,7 +90,7 @@ RF_N_ESTIMATORS = 500
 RF_N_JOBS = -1
 
 # Finetuning hyperparams
-LR = 2e-6
+LR = 2e-5
 EPOCHS = 3
 FT_BATCH_SIZE = 16
 LAMBDA_ANCHOR = 0.5
@@ -129,28 +137,35 @@ def load_nonempty_lines(file_path):
     return lines
 
 # ---- New helper: unified batched embedding extraction (returns torch.Tensor on DEVICE) ----
-def model_batch_embeddings_torch(batch_texts, tokenizer, model, max_length=BATCH_TOKEN_MAX_LEN):
+def model_batch_embeddings_torch(batch_texts, tokenizer, model, max_length=BATCH_TOKEN_MAX_LEN, require_grad=False):
     """
     Returns torch.Tensor shape (B, H) on DEVICE.
     For Mamba: mean-pool last hidden state across non-padding tokens (attention mask).
     For BERT-like encoder models: return CLS token last_hidden_state[:,0,:].
+
+    require_grad: if True, run the forward pass with gradients enabled (used during finetuning).
+                  if False (default), run under no_grad() for faster inference / caching.
     """
     enc = tokenizer(batch_texts, return_tensors='pt', truncation=True, max_length=max_length, padding=True)
     enc = {k: v.to(DEVICE) for k, v in enc.items()}
-    with torch.no_grad():
-        # ensure hidden states are returned by model (we set cfg.output_hidden_states during load)
+
+    # enable grad only if requested (so we can use this helper both for inference caching and for training)
+    with torch.set_grad_enabled(require_grad):
         out = model(**enc)
-    if IS_MAMBA:
-        # outputs.hidden_states[-1] shape: (B, seq_len, hidden)
-        last_hidden = out.hidden_states[-1]  # (B, seq_len, hidden)
-        mask = enc["attention_mask"].unsqueeze(-1)  # (B, seq_len, 1)
-        summed = (last_hidden * mask).sum(dim=1)  # (B, hidden)
-        counts = mask.sum(dim=1).clamp(min=1)  # (B, 1) avoid div by zero
-        emb = summed / counts  # (B, hidden)
-    else:
-        # encoder-style CLS token
-        emb = out.last_hidden_state[:, 0, :]  # (B, hidden)
-    return emb  # torch tensor on DEVICE
+
+        if IS_MAMBA:
+            # outputs.hidden_states[-1] shape: (B, seq_len, hidden)
+            last_hidden = out.hidden_states[-1]  # (B, seq_len, hidden)
+            mask = enc["attention_mask"].unsqueeze(-1)  # (B, seq_len, 1)
+            summed = (last_hidden * mask).sum(dim=1)  # (B, hidden)
+            counts = mask.sum(dim=1).clamp(min=1)  # (B, 1) avoid div by zero
+            emb = summed / counts  # (B, hidden)
+        else:
+            # encoder-style CLS token
+            emb = out.last_hidden_state[:, 0, :]  # (B, hidden)
+
+    return emb  # torch tensor on DEVICE (may require_grad depending on require_grad)
+
 
 def get_embedding_batch(sentences, tokenizer, model, max_length=512):
     """
@@ -480,10 +495,14 @@ def add_slide_with_image(prs, image_path, slide_title):
 
 # ---------------- Main execution ----------------
 def main():
+    # quick sanity check
+    if RESERVED_FINE_PCT + RF_VAL_PCT >= 1.0:
+        raise ValueError("RESERVED_FINE_PCT + RF_VAL_PCT must be < 1.0 (not enough remaining data for RF training).")
+
     # Compute baseline embeddings if missing
     compute_missing_embeddings(device_list)
 
-    # ---------------- Build single finetune set (first FINE_PCT per device) ----------------
+    # ---------------- Build single finetune set (first RESERVED_FINE_PCT per device) ----------------
     per_device_fine_idxs = {}
     all_fine_texts = []
     all_fine_labels = []
@@ -548,13 +567,49 @@ def main():
     student_model = None
     if not skip_finetune:
         print("\nStarting single student fine-tune using first-FINE_PCT interleaved examples (with RF feedback)...")
-        # Prepare orig anchors and prototypes (orig embeddings over fine_texts) using base_model
-        orig_cls_parts = []
-        for i in range(0, len(fine_texts), FT_BATCH_SIZE):
-            batch = fine_texts[i:i+FT_BATCH_SIZE]
-            emb_t = model_batch_embeddings_torch(batch, tokenizer, base_model, max_length=BATCH_TOKEN_MAX_LEN)
-            orig_cls_parts.append(emb_t.cpu().numpy())
-        orig_cls_all = np.vstack(orig_cls_parts)
+        # Prepare orig anchors and prototypes (orig embeddings over fine_texts) using cached baseline .npy where possible
+        print("[2] Loading teacher (baseline) embeddings for the fine set from cache if present...")
+        per_device_emb_slices = {}
+        missing_cache = False
+
+        # Try to read cached baseline .npy files and slice only the fine indices
+        for device in device_list:
+            emb_arr = load_embeddings_memmap_for_device(device, suffix="")
+            if emb_arr is None:
+                # missing or invalid cache -> fallback to computing embeddings for fine_texts below
+                missing_cache = True
+                break
+            t_idxs = per_device_fine_idxs[device]
+            if len(t_idxs) == 0:
+                per_device_emb_slices[device] = []
+            else:
+                # slicing a memmap returns lightweight arrays per row; cast to float32 to be consistent
+                per_device_emb_slices[device] = [np.array(emb_arr[i], dtype=np.float32) for i in t_idxs]
+
+        if not missing_cache:
+            # Interleave slices to match the fine_texts ordering used above
+            orig_list, _ = interleave_round_robin(per_device_emb_slices, device_list, device_label_map)
+            if len(orig_list) == 0:
+                raise RuntimeError("No fine examples found when loading cached embeddings.")
+            orig_cls_all = np.vstack(orig_list).astype(np.float32)
+            print(f"[loaded] orig_cls_all shape: {orig_cls_all.shape}")
+        else:
+            # Fallback behavior: compute teacher embeddings only for the fine_texts (previous behavior),
+            # rather than recomputing for everything.
+            print("[fallback] Some baseline .npy files missing/invalid -> computing teacher embeddings for fine_texts now.")
+            orig_cls_parts = []
+            for i in range(0, len(fine_texts), FT_BATCH_SIZE):
+                batch = fine_texts[i:i+FT_BATCH_SIZE]
+                emb_t = model_batch_embeddings_torch(batch, tokenizer, base_model, max_length=BATCH_TOKEN_MAX_LEN)
+                orig_cls_parts.append(emb_t.cpu().numpy())
+            orig_cls_all = np.vstack(orig_cls_parts).astype(np.float32)
+            print(f"[computed] orig_cls_all shape: {orig_cls_all.shape}")
+
+        # Sanity check: ensure the number of rows matches the number of fine_texts
+        if orig_cls_all.shape[0] != len(fine_texts):
+            raise RuntimeError(f"orig_cls_all rows ({orig_cls_all.shape[0]}) != number of fine_texts ({len(fine_texts)}).")
+
+        # Create labels array and centroids (unchanged)
         labels_arr = np.array(fine_labels, dtype=int)
 
         num_classes = len(device_list)
@@ -616,8 +671,11 @@ def main():
 
                 # Use unified helper to compute student embeddings (so Mamba/BERT consistent)
                 enc_texts = list(texts_b)
-                cls_emb = model_batch_embeddings_torch(enc_texts, tokenizer, student_model, max_length=BATCH_TOKEN_MAX_LEN)
-                cls_emb = cls_emb.to(DEVICE)
+                # compute student embeddings **with gradients enabled** so anchor/proto losses update the student
+                cls_emb = model_batch_embeddings_torch(enc_texts, tokenizer, student_model, max_length=BATCH_TOKEN_MAX_LEN, require_grad=True)
+                # ensure same dtype as orig_emb_t for stable MSE computation
+                cls_emb = cls_emb.to(dtype=torch.float32, device=DEVICE)
+
 
                 if isinstance(orig_emb_b, np.ndarray):
                     orig_emb_t = torch.from_numpy(orig_emb_b).to(dtype=torch.float32, device=DEVICE)
@@ -675,7 +733,12 @@ def main():
     cm_finetuned_records = []
     classes = [d.replace('.json', '') for d in device_list]
 
-    rf_train_pcts = np.arange(START_PCT, END_PCT + 1e-9, STEP_PCT)
+    rf_train_pcts = np.arange(START_PCT, END_PCT, STEP_PCT)
+
+    print(f"Reserved fine block: first {RESERVED_FINE_PCT*100:.1f}% per device (always excluded from RF training).")
+    if START_PCT <= RESERVED_FINE_PCT:
+        print(f"Note: START_PCT = {START_PCT*100:.1f}% <= RESERVED_FINE_PCT = {RESERVED_FINE_PCT*100:.1f}%. The initial sweep step(s) may have empty RF training sets until RF_TRAIN_PCT > {RESERVED_FINE_PCT*100:.1f}%.")
+
     for pct in rf_train_pcts:
         RF_TRAIN_PCT = float(pct)
         print("------------------------------------------------------------")
@@ -689,7 +752,8 @@ def main():
             rf_val_count = int(total_lines * RF_VAL_PCT)
             rf_val_count = max(1, rf_val_count)
 
-            fine_end_idx = int(total_lines * FINE_PCT)
+            # use RESERVED_FINE_PCT so reserved/fine block is always the fixed first 20%
+            fine_end_idx = int(total_lines * RESERVED_FINE_PCT)
             fine_end_idx = min(fine_end_idx, total_lines - rf_val_count)
             if fine_end_idx < 0:
                 fine_end_idx = 0
@@ -761,7 +825,7 @@ def main():
                 print(f"  -> Baseline Macro F1 at RF_TRAIN_PCT={RF_TRAIN_PCT*100:.1f}%: {f1m:.4f}")
                 cm = confusion_matrix(y_val, y_pred, labels=list(range(len(device_list))))
                 cm_norm = normalize_cm_rows(cm)
-                out_base = os.path.join(CM_BASELINE_DIR, f"confusion_baseline_RFtrain_{int(RF_TRAIN_PCT*100):02d}pct")
+                out_base = os.path.join(CM_BASELINE_DIR, f"confusion_baseline_RFtrain_{RF_TRAIN_PCT*100:.1f}pct")
                 title_text = f"Baseline RF Train {RF_TRAIN_PCT*100:.1f}% — Macro F1: {f1m:.4f}"
                 saved = save_confusion_matrix_images(cm_norm, classes, out_base, title_text)
                 cm_baseline_records.append({"pct": RF_TRAIN_PCT, "macro_f1": float(f1m), "n_train": int(X_train.shape[0]), "n_val": int(X_val.shape[0]), "img_png": saved.get("png"), "cm": cm_norm})
@@ -865,7 +929,8 @@ def main():
             slide = prs.slides.add_slide(title_slide_layout)
             slide.shapes.title.text = "Confusion Matrices"
             subtitle = slide.placeholders[1]
-            subtitle.text = f"Generated: {datetime.utcnow().isoformat()} UTC"
+            subtitle.text = f"Generated: {datetime.now(ZoneInfo('Australia/Sydney')).isoformat()} Sydney time"
+
         except Exception:
             pass
         for rec in records:
