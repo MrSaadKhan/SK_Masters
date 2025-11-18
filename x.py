@@ -30,6 +30,7 @@ import torch.nn as nn
 import sys
 import matplotlib.pyplot as plt
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from torch.utils.data import DataLoader
 import time
 import matplotlib.pyplot as plt
@@ -72,14 +73,15 @@ device_list = [
 INPUT_FOLDER = "preprocessed_data_group_merged/ungrouped"
 
 # Model selection
-MODEL_NAME = "state-spaces/mamba-130m-hf"
+# MODEL_NAME = "state-spaces/mamba-130m-hf"
+MODEL_NAME = "bert-base-uncased"
 
 # Detect Mamba-like model (minimal rule)
 IS_MAMBA = ("mamba" in MODEL_NAME.lower()) or MODEL_NAME.startswith("state-spaces/mamba")
 
 # Fraction of each device file to use (0.0 < DATA_USAGE_PCT <= 1.0)
 # Set to 0.5 to use the first 50% of each device's data.
-DATA_USAGE_PCT = 0.1  # default 1.0 (use everything); change to 0.5, 0.25, etc.
+DATA_USAGE_PCT = 1  # default 1.0 (use everything); change to 0.5, 0.25, etc.
 
 # Finetune flag
 FINETUNE_ENABLED = False
@@ -1131,6 +1133,12 @@ def main():
             body = "Model had been successfully finetuned"
             special.send_test_email(subject, body)
 
+            ############
+            subject = "Finetuning Complete! - manual steps needed!"
+            body = "Please quit and restart program"
+            special.send_test_email(subject, body)
+            ############
+
             # move model back to device for embedding generation
             try:
                 student_model.to(DEVICE)
@@ -1502,7 +1510,7 @@ def main():
             slide = prs.slides.add_slide(title_slide_layout)
             slide.shapes.title.text = "Confusion Matrices"
             subtitle = slide.placeholders[1]
-            subtitle.text = f"Generated: {datetime.utcnow().isoformat()} UTC"
+            subtitle.text = f"Generated: {datetime.now(ZoneInfo('Australia/Sydney')).isoformat()} Sydney time"
         except Exception:
             pass
         for rec in records:

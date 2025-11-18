@@ -49,6 +49,7 @@ plots_5/*.png
 Output*.txt
 special.py
 mamba_token_output*
+mmamba*
 /token_output*
 results.txt
 scores_plot.png

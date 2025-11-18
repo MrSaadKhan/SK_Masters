@@ -1,0 +1,25 @@
+Loading tokenizer and model (this may take a moment)...
+2025-11-16 23:09:38.929068: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-11-16 23:09:38.942602: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1763294978.957366  772289 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1763294978.962127  772289 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1763294978.974136  772289 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1763294978.974155  772289 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1763294978.974159  772289 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1763294978.974161  772289 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2025-11-16 23:09:38.977548: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+
+All device line counts:
+  irobot_roomba.json: total non-empty lines = 5286
+  line_clova_wave.json: total non-empty lines = 117682
+  nature_remo.json: total non-empty lines = 2200
+  qrio_hub.json: total non-empty lines = 35927
+  xiaomi_mijia_led.json: total non-empty lines = 4774
+  powerelectric_wi-fi_plug.json: total non-empty lines = 59663
+  planex_smacam_outdoor.json: total non-empty lines = 38088
+Total lines across all devices: 263620
+
+Streaming-computing embeddings for irobot_roomba.json (5286 lines). Writing .npy -> embeddings/irobot_roomba.emb.npy
+Embedding (stream) irobot_roomba:   0%|          | 0/166 [00:00<?, ?it/s]Embedding (stream) irobot_roomba:   1%|          | 1/166 [00:02<07:23,  2.69s/it]Embedding (stream) irobot_roomba:   1%|          | 2/166 [00:05<07:24,  2.71s/it]Embedding (stream) irobot_roomba:   2%|▏         | 3/166 [00:08<07:17,  2.69s/it]Embedding (stream) irobot_roomba:   2%|▏         | 4/166 [00:10<07:14,  2.68s/it]Embedding (stream) irobot_roomba:   3%|▎         | 5/166 [00:13<07:32,  2.81s/it]Embedding (stream) irobot_roomba:   4%|▎         | 6/166 [00:16<07:19,  2.75s/it]Embedding (stream) irobot_roomba:   4%|▍         | 7/166 [00:18<06:56,  2.62s/it]Embedding (stream) irobot_roomba:   5%|▍         | 8/166 [00:20<06:27,  2.45s/it]
