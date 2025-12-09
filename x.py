@@ -28,12 +28,15 @@ from transformers import AutoTokenizer, AutoModel, AutoConfig, AutoModelForCausa
 import torch
 import torch.nn as nn
 import sys
+import matplotlib
+# choose non-interactive backend before importing pyplot to avoid Tk/Tkinter on Windows
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from torch.utils.data import DataLoader
 import time
-import matplotlib.pyplot as plt
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # email & traceback imports for wrapper
 import traceback
@@ -70,11 +73,13 @@ device_list = [
     "planex_smacam_outdoor.json"
 ]
 # adjust paths as needed
-INPUT_FOLDER = "preprocessed_data_group_merged/ungrouped"
+INPUT_FOLDER = r"C:\Users\Saad Khan\Desktop\new_pipeline\data_individual"
 
 # Model selection
-# MODEL_NAME = "state-spaces/mamba-130m-hf"
-MODEL_NAME = "bert-base-uncased"
+
+MODEL_NAME = "state-spaces/mamba-130m-hf"
+# MODEL_NAME = "bert-base-uncased"
+
 
 # Detect Mamba-like model (minimal rule)
 IS_MAMBA = ("mamba" in MODEL_NAME.lower()) or MODEL_NAME.startswith("state-spaces/mamba")
@@ -83,8 +88,23 @@ IS_MAMBA = ("mamba" in MODEL_NAME.lower()) or MODEL_NAME.startswith("state-space
 # Set to 0.5 to use the first 50% of each device's data.
 DATA_USAGE_PCT = 1  # default 1.0 (use everything); change to 0.5, 0.25, etc.
 
+# Per-device finetune proportions as a mapping (edit these values).
+# Values don't need to sum to 1; they'll be normalized automatically.
+FINETUNE_PROPORTIONS_MAP = {
+    "irobot_roomba.json": 0.5,
+    "line_clova_wave.json": 1.0,   # ↑ more emphasis
+    "nature_remo.json": 0.5,
+    "qrio_hub.json": 0.5,
+    "xiaomi_mijia_led.json": 0.8,
+    "powerelectric_wi-fi_plug.json": 1.0,   # ↑ more emphasis
+    "planex_smacam_outdoor.json": 1.2,      # ↑ most emphasis
+}
+
+# Build the list aligned to device_list (used by the rest of the script)
+FINETUNE_PROPORTIONS = [FINETUNE_PROPORTIONS_MAP.get(d, 0.0) for d in device_list]
+
 # Finetune flag
-FINETUNE_ENABLED = False
+FINETUNE_ENABLED = True
 DEBUG_FT_VERBOSE = True
 student_model = None
 
@@ -96,8 +116,8 @@ RF_VAL_PCT = 0.30
 RESERVED_FINE_PCT = 0.20
 
 # Fine-tune specification
-# FINE_PCT = 0.01
-FINE_PCT = 0.0001
+FINE_PCT = 0.01
+# FINE_PCT = 0.0001
 
 REUSE_FINETUNE_EMBS_IF_PRESENT = True
 
@@ -115,9 +135,9 @@ else:
 # ---------------- Auto-tune batch sizes (same logic as before) ----------------
 def bytes_to_gb(x): return float(x) / (1024**3)
 
-BATCH_TOKEN_MAX_LEN = 512
-EMBED_BATCH_SIZE = 12
-FT_BATCH_SIZE = 1
+BATCH_TOKEN_MAX_LEN = 256#1410#2555
+EMBED_BATCH_SIZE = 50#12#28
+FT_BATCH_SIZE = 4#1
 
 # if IS_CUDA:
 #     try:
@@ -164,7 +184,8 @@ RF_N_ESTIMATORS = 500
 RF_N_JOBS = -1
 
 # Finetuning hyperparams
-LR = 2e-5
+LR = 2e-5   # MAMBA Learning Rate
+LR = 2e-6   # BERT Learning Rate
 EPOCHS = 3
 LAMBDA_ANCHOR = 0.5
 LAMBDA_PROTO = 0.5
@@ -172,7 +193,7 @@ LAMBDA_CLS = 0.5
 LAMBDA_RF  = 0.5
 
 # Embedding cache folder
-EMB_DIR = "embeddings"
+EMB_DIR = r"C:\Users\Saad Khan\Desktop\new_pipeline\embeddings-mamba-individual-256"
 FINETUNED_MODEL_DIR = os.path.join(EMB_DIR, "finetuned_model")
 CM_DIR = os.path.join(EMB_DIR, "confusion_matrices")
 CM_BASELINE_DIR = os.path.join(CM_DIR, "baseline")
@@ -382,6 +403,76 @@ def interleave_round_robin(per_device_lists, devices_order, device_label_map):
                 pointers[d] += 1
                 total_remaining -= 1
     return combined, labels
+
+def interleave_with_proportions(per_device_texts_map, device_list, proportions, device_label_map):
+    """
+    Build a single list of (texts, labels) by repeatedly pulling items from devices
+    in a weighted round-robin order determined by `proportions`.
+    - `per_device_texts_map` maps device -> list(texts) (these lists will NOT be mutated outside).
+    - `proportions` may be any non-negative numbers (they will be normalized).
+    - returns (texts_list, labels_list)
+    """
+    # shallow copy queues so we don't mutate the original maps
+    queues = {d: list(per_device_texts_map.get(d, [])) for d in device_list}
+    ps = np.array(proportions, dtype=float)
+    if ps.sum() <= 0:
+        ps = np.ones_like(ps)
+    ps = ps / ps.sum()
+
+    # create a repeated order list proportional to ps (scale controls granularity)
+    scale = 100
+    order = []
+    for d, p in zip(device_list, ps):
+        cnt = max(1, int(round(p * scale)))
+        order.extend([d] * cnt)
+
+    texts = []
+    labels = []
+    total = sum(len(q) for q in queues.values())
+    idx = 0
+    # cycle through `order` and pop from that device's queue when available
+    while total > 0:
+        d = order[idx % len(order)]
+        q = queues[d]
+        if q:
+            texts.append(q.pop(0))
+            labels.append(device_label_map[d])
+            total -= 1
+        idx += 1
+
+    return texts, labels
+
+def interleave_randomly_with_proportions(per_device_texts_map, device_list, proportions, device_label_map):
+    """
+    Build a single list of (texts, labels) by randomly selecting items from devices
+    in proportion to `proportions`.
+    - `per_device_texts_map` maps device -> list(texts).
+    - `proportions` may be any non-negative numbers (they will be normalized).
+    - returns (texts_list, labels_list)
+    """
+    # shallow copy queues so we don't mutate the original maps
+    queues = {d: list(per_device_texts_map.get(d, [])) for d in device_list}
+    ps = np.array(proportions, dtype=float)
+    if ps.sum() <= 0:
+        ps = np.ones_like(ps)
+    ps = ps / ps.sum()
+
+    texts = []
+    labels = []
+
+    # Continue until all queues are empty
+    while any(queues[d] for d in device_list):
+        # normalize probabilities over devices that still have items
+        available_devices = [d for d in device_list if queues[d]]
+        available_probs = np.array([ps[device_list.index(d)] for d in available_devices])
+        available_probs /= available_probs.sum()
+
+        # pick one device according to probabilities
+        d = np.random.choice(available_devices, p=available_probs)
+        texts.append(queues[d].pop(0))
+        labels.append(device_label_map[d])
+
+    return texts, labels
 
 # ---------------- Streaming embedding computation & caching ----------------
 from numpy.lib.format import open_memmap
@@ -747,7 +838,9 @@ def main():
 
     per_device_texts_map = {device_list[i]: all_fine_texts[i] for i in range(len(device_list))}
     per_device_labels_map = {device_list[i]: all_fine_labels[i] for i in range(len(device_list))}
-    fine_texts, fine_labels = interleave_round_robin(per_device_texts_map, device_list, device_label_map)
+    # fine_texts, fine_labels = interleave_round_robin(per_device_texts_map, device_list, device_label_map)
+    fine_texts, fine_labels = interleave_with_proportions(per_device_texts_map, device_list, FINETUNE_PROPORTIONS, device_label_map)
+    # fine_texts, fine_labels = interleave_randomly_with_proportions(per_device_texts_map, device_list, FINETUNE_PROPORTIONS, device_label_map)
 
     print(f"\nPrepared global fine-tune set from first {FINE_PCT*100:.1f}% per device: total fine examples = {len(fine_texts)}")
 
@@ -920,6 +1013,8 @@ def main():
         mse_loss = nn.MSELoss()
         ce_loss_per_sample = nn.CrossEntropyLoss(reduction='none')
         optimizer = torch.optim.AdamW(list(student_model.parameters()) + list(classifier_head.parameters()), lr=LR)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)
+        
         print("[11.1] Classifier and optimizer ready.", flush=True)
 
         print("  Fine-tune loop (anchor + proto + classification + RF-feedback)...", flush=True)
@@ -971,7 +1066,8 @@ def main():
                     print(f"[FT][ERROR] rf_teacher.predict failed: {e}", flush=True)
                     raise
 
-                labels_np = np.array(labels_b, dtype=int)
+                # labels_np = np.array(labels_b, dtype=int)
+                labels_np = np.asarray(labels_b, dtype=int)
 
                 # tokenization
                 try:
@@ -1114,6 +1210,11 @@ def main():
             lc = float(loss_cls_vec.mean().detach().cpu().numpy()) if isinstance(loss_cls_vec, torch.Tensor) else float(loss_cls_vec.mean())
             lrf = float(loss_rf.detach().cpu().numpy()) if isinstance(loss_rf, torch.Tensor) else float(loss_rf)
             print(f"   Epoch {epoch+1}/{EPOCHS} - avg loss: {avg_loss:.6f} (anchor {la:.6f}, proto {lp:.6f}, cls {lc:.6f}, rf {lrf:.6f})", flush=True)
+            scheduler.step(avg_loss)
+            for param_group in optimizer.param_groups:
+                current_lr = param_group['lr']
+            print(f"   Current LR after epoch {epoch+1}: {current_lr:.2e}", flush=True)
+
 
         print("  Finished finetuning student.")
 
@@ -1138,6 +1239,7 @@ def main():
             body = "Please quit and restart program"
             special.send_test_email(subject, body)
             ############
+
 
             # move model back to device for embedding generation
             try:

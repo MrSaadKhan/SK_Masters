@@ -2,13 +2,6 @@ import os
 import prepare_data
 import group_data
 
-# def save_individual_file(list_of_lists, name, path):
-#     path = os.path.join(path, f'{name}.txt')
-#     with open(path, 'w') as file:
-#         for inner_list in list_of_lists:
-#             line = ','.join(map(str, inner_list))
-#             file.write(line + '\n')
-
 def save_individual_file(list_of_dicts, name, path):
     path = os.path.join(path, f'{name}.txt')
     with open(path, 'w') as file:
@@ -58,7 +51,7 @@ def read_file_as_list_of_lists(file_path):
 
 
 if __name__ == "__main__":
-    file_path = r'/home/iotresearch/saad/data/KDDI-IoT-2019/ipfix'
+    file_path = r'/home/iotresearch/saad/masters/data/json'
 
     if not os.path.exists(file_path):
         file_path = r'C:\Users\Saad Khan\OneDrive - UNSW\University\5th Yr\T1\Thesis A\Data'
@@ -110,5 +103,4 @@ if __name__ == "__main__":
         seen = group_data.group_data_number(seen, 5, 1)
         unseen = group_data.group_data_number(unseen, 5, 1)
         save_files_skip(seen, unseen, device, save_path)
-### ADD grouping logic HERE!!!!!!!!!!
     print("Complete :)")

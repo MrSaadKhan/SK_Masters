@@ -128,7 +128,3 @@ def prepare_data(file_path, group_option=0, time_group=0, num2word_option=0):
 
     print('\033[92mData prepared successfully ✔\033[0m')
     return dev1_seen, dev1_unseen
-
-
-# if __name__ == "__main__":
-#     print(prepare_data("/home/iotresearch/saad/data/KDDI-IoT-2019/ipfix/planex_smacam_pantilt.json"))

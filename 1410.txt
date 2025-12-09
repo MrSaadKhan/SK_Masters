@@ -1,30 +1,0 @@
-CUDA not available; running on CPU
-Loading tokenizer and model (this may take a moment)...
-2025-11-10 16:13:21.288568: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-2025-11-10 16:13:21.305276: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-E0000 00:00:1762751601.324471  535547 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
-E0000 00:00:1762751601.330587  535547 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
-W0000 00:00:1762751601.346307  535547 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1762751601.346349  535547 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1762751601.346353  535547 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1762751601.346356  535547 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-2025-11-10 16:13:21.350633: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
-To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
-The following generation flags are not valid and may be ignored: ['output_hidden_states']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
-The following generation flags are not valid and may be ignored: ['output_hidden_states']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
-The fast path is not available because one of `(selective_state_update, selective_scan_fn, causal_conv1d_fn, causal_conv1d_update, mamba_inner_fn)` is None. Falling back to the sequential implementation of Mamba, as use_mambapy is set to False. To install follow https://github.com/state-spaces/mamba/#installation and https://github.com/Dao-AILab/causal-conv1d. For the mamba.py backend, follow https://github.com/alxndrTL/mamba.py.
-[info] Enabled gradient checkpointing on base_model (saves activations).
-
-All device line counts:
-  irobot_roomba.json: total non-empty lines = 528
-  line_clova_wave.json: total non-empty lines = 11768
-  nature_remo.json: total non-empty lines = 220
-  qrio_hub.json: total non-empty lines = 3592
-  xiaomi_mijia_led.json: total non-empty lines = 477
-  powerelectric_wi-fi_plug.json: total non-empty lines = 5966
-  planex_smacam_outdoor.json: total non-empty lines = 3808
-Total lines across all devices: 26359
-
-Streaming-computing embeddings for irobot_roomba.json (528 lines). Writing .npy -> embeddings/irobot_roomba.emb.npy
-Embedding (stream) irobot_roomba:   0%|          | 0/44 [00:00<?, ?it/s]Embedding (stream) irobot_roomba:   2%|▏         | 1/44 [00:31<22:13, 31.01s/it]Embedding (stream) irobot_roomba:   5%|▍         | 2/44 [01:01<21:39, 30.93s/it]

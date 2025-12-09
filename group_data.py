@@ -1,14 +1,5 @@
-# import pandas as pd
-# import ipaddress
-# import os
-# import time
 import re
 from datetime import datetime, timedelta
-
-# def group_data(output):
-
-#     return sorted_output
-
 
 def group_data_time(output, time_group = 5):
     time_format = '%Y-%m-%d %H:%M:%S.%f'
