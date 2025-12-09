@@ -1,4 +1,4 @@
-# Project README
+# Project
 
 **Quick overview**
 
