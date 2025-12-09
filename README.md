@@ -77,16 +77,11 @@ If `pip install -r requirements.txt` fails while trying to install `torch` / `to
 
 Put your dataset in a folder named `data/` at the repository root, or change the paths in the scripts to point to your data location.
 
-If you have a script to download the dataset, run:
+Simply run:
 
 ```bash
-bash scripts/download_data.sh
-# or
-python scripts/download_data.py --out data/
+python download_data.py
 ```
-
-Replace these commands with your project's actual downloader if present.
-
 ---
 
 ## Data preprocessing
@@ -96,13 +91,9 @@ Run the preprocessing script to convert raw data into the format expected by `x.
 Example:
 
 ```bash
-python data_preprocessing.py --input data/raw --output data/processed
+python data_preprocessing.py
+python new_structure.py
 ```
-
-Expected outputs of preprocessing (adjust names if your scripts differ):
-
-* `data/processed/merged_embeddings.txt` (or similar merged .txt files that contain timestamps and vectors)
-* any metadata files required by `x.py`
 
 ---
 
@@ -114,17 +105,8 @@ Example usage (replace flags with your script's actual options):
 
 ```bash
 # CPU
-python x.py --data data/processed --device cpu --out results/
-
-# GPU (if available)
-python x.py --data data/processed --device cuda --out results/ --batch-size 64
+python x.py
 ```
-
-Notes:
-
-* If your script expects merged `.txt` files with timestamps followed by vector entries (see project notes), ensure preprocessing produces that format.
-* If there are additional required arguments (model name, checkpoint path, train/test split settings), pass them on the command line or edit `x.py` defaults.
-
 ---
 
 ## Plotting (`plot.py`)
@@ -132,11 +114,8 @@ Notes:
 After `x.py` finishes and writes results to `results/` (or your chosen output directory), run:
 
 ```bash
-python plot.py --input results/ --out plots/
+python plot.py
 ```
-
-This will generate the "nice plots" referenced in the project notes (confusion matrices, embedding visualizations, performance curves, etc.).
-
 ---
 
 ## Outputs and artifacts
