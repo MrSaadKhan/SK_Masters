@@ -69,7 +69,7 @@ If `pip install -r requirements.txt` fails while trying to install `torch` / `to
 2. If you want CPU-only PyTorch, you can install the CPU wheels explicitly (e.g. `pip install torch --index-url https://download.pytorch.org/whl/cpu`).
 3. If the latest version does not work for your environment, try installing a slightly older matching wheel for your Python/CUDA versions.
 
-> On Windows, ensure MSVC (Visual Studio Build Tools) is installed before installing packages that require compilation.
+> On Windows, ensure MSVC (Visual Studio Build Tools) and cuda runtime (gpu) is installed before installing python packages.
 
 ---
 
